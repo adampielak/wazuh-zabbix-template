@@ -1,7 +1,10 @@
-# Template Wazuh API by Script (Zabbix 7.x)
+# wazuh-zabbix-template
 
-Wazuh Zabbix Template
-tick@linuxmafia.pl
+![Zabbix](https://img.shields.io/badge/zabbix-7.x-red)
+![Wazuh](https://img.shields.io/badge/wazuh-4.x-005571)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+Zabbix 7.x template for monitoring Wazuh via its REST API. Covers cluster health, agent status, daemon states, queue metrics, and SLA — with dynamic token auth and LLD per cluster node.
 
 ## Purpose
 
