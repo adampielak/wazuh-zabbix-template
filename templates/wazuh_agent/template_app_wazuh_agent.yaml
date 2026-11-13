@@ -174,7 +174,7 @@ zabbix_export:
           type: DEPENDENT
           key: wazuh.agent.status
           delay: '0'
-          description: 'Connection status of the agent: connected - a control message was received from the manager in the last 20 seconds, disconnected - no ACK in the last 60 seconds, pending - waiting for the connection.'
+          description: 'Connection status of the agent: connected - connection established with the manager in the last 10 seconds, disconnected - no ACK in the last 60 seconds, pending - waiting for the connection.'
           valuemap:
             name: 'Wazuh agent status'
           preprocessing:
@@ -551,7 +551,7 @@ zabbix_export:
           type: DEPENDENT
           key: wazuh.agent.status
           delay: '0'
-          description: 'Connection status of the agent: connected - a control message was received from the manager in the last 20 seconds, disconnected - no ACK in the last 60 seconds, pending - waiting for the connection.'
+          description: 'Connection status of the agent: connected - connection established with the manager in the last 10 seconds, disconnected - no ACK in the last 60 seconds, pending - waiting for the connection.'
           valuemap:
             name: 'Wazuh agent status'
           preprocessing:
