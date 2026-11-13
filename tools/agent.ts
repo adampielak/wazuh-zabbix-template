@@ -58,7 +58,7 @@ function build(name: string, type: string | undefined): TemplateDef {
       description: "Last modification time of the wazuh-agentd state file. A file that is no longer updated means wazuh-agentd is stopped or hung.",
       tags: [["component", "health"]],
     },
-    dep("Connection status", "wazuh.agent.status", "Connection status of the agent: connected - a control message was received from the manager in the last 20 seconds, disconnected - no ACK in the last 60 seconds, pending - waiting for the connection.", "health", {
+    dep("Connection status", "wazuh.agent.status", "Connection status of the agent: connected - connection established with the manager in the last 10 seconds, disconnected - no ACK in the last 60 seconds, pending - waiting for the connection.", "health", {
       valuemap: "Wazuh agent status",
       preprocessing: [
         js(`var match = value.match(/^status='([^']*)'$/m),
