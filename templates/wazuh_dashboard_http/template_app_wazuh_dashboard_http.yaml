@@ -1,0 +1,560 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: a571c0d144b14fd4a87a9d9b2aa9fcd6
+      name: 'Templates/Applications'
+  templates:
+    - uuid: f98ea12ca28c4d5cbc9abcdeb6a40418
+      template: 'Wazuh dashboard by HTTP'
+      name: 'Wazuh dashboard by HTTP'
+      description: |
+        Monitors the Wazuh dashboard (OpenSearch Dashboards) through its status API: overall state, state of each plugin, Node.js heap, event loop delay, response times and uptime.
+
+        Setup:
+
+        1. Link the template to a host and set {$WAZUH.DASHBOARD.HOST} to the Wazuh dashboard node.
+        2. Set {$WAZUH.DASHBOARD.USER} and {$WAZUH.DASHBOARD.PASSWORD} to a Wazuh indexer user. With the security plugin enabled, GET /api/status requires authentication; any user that can log in to the dashboard is sufficient.
+        3. Change {$WAZUH.DASHBOARD.PORT} if the dashboard does not listen on 443.
+
+        Certificates are not verified: the HTTP agent item does not set "verify_peer" and "verify_host".
+
+        Tested with Wazuh dashboard 4.14 (OpenSearch Dashboards 2.19) and Zabbix 7.0.
+
+        Created by Adam "tick" Pielak, https://wazuh.blog
+      vendor:
+        name: 'Adam "tick" Pielak'
+        version: '7.0-1'
+      groups:
+        - name: 'Templates/Applications'
+      items:
+        - uuid: d425ab208f4748e298023b9029dde72f
+          name: 'Service status'
+          type: SIMPLE
+          key: 'net.tcp.service["{$WAZUH.DASHBOARD.SCHEME}","{$WAZUH.DASHBOARD.HOST}","{$WAZUH.DASHBOARD.PORT}"]'
+          description: 'Checks if the dashboard port is accepting TCP connections.'
+          valuemap:
+            name: 'Service state'
+          preprocessing:
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '10m'
+          tags:
+            - tag: component
+              value: health
+            - tag: component
+              value: network
+          triggers:
+            - uuid: bba116c0593c4a329d2864720786200e
+              expression: 'last(/Wazuh dashboard by HTTP/net.tcp.service["{$WAZUH.DASHBOARD.SCHEME}","{$WAZUH.DASHBOARD.HOST}","{$WAZUH.DASHBOARD.PORT}"])=0'
+              name: 'Wazuh dashboard: Service is down'
+              priority: AVERAGE
+              description: 'The dashboard port is not accepting TCP connections.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: ae29b311d6be48739f47316728e673d6
+          name: 'Service response time'
+          type: SIMPLE
+          key: 'net.tcp.service.perf["{$WAZUH.DASHBOARD.SCHEME}","{$WAZUH.DASHBOARD.HOST}","{$WAZUH.DASHBOARD.PORT}"]'
+          value_type: FLOAT
+          units: s
+          description: 'Checks the performance of the TCP service.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: '0d5d6bb2e67b432c9d6d403c727be750'
+              expression: 'min(/Wazuh dashboard by HTTP/net.tcp.service.perf["{$WAZUH.DASHBOARD.SCHEME}","{$WAZUH.DASHBOARD.HOST}","{$WAZUH.DASHBOARD.PORT}"],5m)>{$WAZUH.DASHBOARD.RESPONSE_TIME.MAX.WARN}'
+              name: 'Wazuh dashboard: Service response time is too high'
+              event_name: 'Wazuh dashboard: Service response time is too high (over {$WAZUH.DASHBOARD.RESPONSE_TIME.MAX.WARN} for 5m)'
+              priority: WARNING
+              description: 'The TCP service of the dashboard responds slowly.'
+              manual_close: 'YES'
+              dependencies:
+                - name: 'Wazuh dashboard: Service is down'
+                  expression: 'last(/Wazuh dashboard by HTTP/net.tcp.service["{$WAZUH.DASHBOARD.SCHEME}","{$WAZUH.DASHBOARD.HOST}","{$WAZUH.DASHBOARD.PORT}"])=0'
+              tags:
+                - tag: scope
+                  value: performance
+        - uuid: '88176f5593b04f62b44eacbb1c24c287'
+          name: 'Get status'
+          type: HTTP_AGENT
+          key: wazuh.dashboard.get_status
+          delay: '1m'
+          history: '0'
+          value_type: TEXT
+          trends: '0'
+          authtype: BASIC
+          username: '{$WAZUH.DASHBOARD.USER}'
+          password: '{$WAZUH.DASHBOARD.PASSWORD}'
+          timeout: '15s'
+          url: '{$WAZUH.DASHBOARD.SCHEME}://{$WAZUH.DASHBOARD.HOST}:{$WAZUH.DASHBOARD.PORT}/api/status'
+          status_codes: '200,503'
+          description: 'Returns the state and metrics of the dashboard. The API answers 503 when the overall state is red.'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: '59d26b966fed496bac47ae38691562a8'
+          name: 'Overall state'
+          type: DEPENDENT
+          key: wazuh.dashboard.state
+          delay: '0'
+          description: 'Overall state of the dashboard: the worst state of all plugins.'
+          valuemap:
+            name: 'Wazuh dashboard state'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.status.overall.state'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var state = ['green', 'yellow', 'red'];
+
+                  return state.indexOf(value.trim()) === -1 ? 255 : state.indexOf(value.trim());
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: d1c9e0e5963e4dcaa337f96edce2ee2e
+              expression: 'nodata(/Wazuh dashboard by HTTP/wazuh.dashboard.state,30m)=1'
+              name: 'Wazuh dashboard: Failed to fetch status'
+              event_name: 'Wazuh dashboard: Failed to fetch status (or no data for 30m)'
+              priority: WARNING
+              description: 'The status API returned no data for 30 minutes. Check the "Get status" item error and the API credentials.'
+              manual_close: 'YES'
+              dependencies:
+                - name: 'Wazuh dashboard: Service is down'
+                  expression: 'last(/Wazuh dashboard by HTTP/net.tcp.service["{$WAZUH.DASHBOARD.SCHEME}","{$WAZUH.DASHBOARD.HOST}","{$WAZUH.DASHBOARD.PORT}"])=0'
+              tags:
+                - tag: scope
+                  value: availability
+            - uuid: '1ea85db9fa0447d1875b633f97df264d'
+              expression: 'last(/Wazuh dashboard by HTTP/wazuh.dashboard.state)=2'
+              name: 'Wazuh dashboard: State is RED'
+              priority: HIGH
+              description: 'At least one core service or plugin is red. The dashboard is not usable. A red "core:opensearch" means the dashboard cannot reach the Wazuh indexer.'
+              tags:
+                - tag: scope
+                  value: availability
+            - uuid: '90ceb63a21234725848e8815e510f001'
+              expression: 'last(/Wazuh dashboard by HTTP/wazuh.dashboard.state)=1'
+              name: 'Wazuh dashboard: State is YELLOW'
+              priority: AVERAGE
+              description: 'At least one core service or plugin is degraded.'
+              dependencies:
+                - name: 'Wazuh dashboard: State is RED'
+                  expression: 'last(/Wazuh dashboard by HTTP/wazuh.dashboard.state)=2'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: eee94cc1962c4e64baab9094988f5e7c
+          name: Version
+          type: DEPENDENT
+          key: wazuh.dashboard.version
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'OpenSearch Dashboards version.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.version.number'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: application
+          triggers:
+            - uuid: '360a039af480406f909f3c18ee7e730a'
+              expression: 'last(/Wazuh dashboard by HTTP/wazuh.dashboard.version,#1)<>last(/Wazuh dashboard by HTTP/wazuh.dashboard.version,#2) and length(last(/Wazuh dashboard by HTTP/wazuh.dashboard.version))>0'
+              name: 'Wazuh dashboard: Version has changed'
+              priority: INFO
+              description: 'The dashboard version has changed. Acknowledge to close the problem manually.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: notice
+        - uuid: '4d415227496743229407f5d936a41f4f'
+          name: Uptime
+          type: DEPENDENT
+          key: wazuh.dashboard.uptime
+          delay: '0'
+          units: uptime
+          description: 'Time since the Node.js process started.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.metrics.process.uptime_in_millis'
+            - type: JAVASCRIPT
+              parameters:
+                - 'return Math.floor(value / 1000);'
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: application
+          triggers:
+            - uuid: f43e1db0994e485d9f0f929d1d80947b
+              expression: 'last(/Wazuh dashboard by HTTP/wazuh.dashboard.uptime)<10m'
+              name: 'Wazuh dashboard: Has been restarted'
+              event_name: 'Wazuh dashboard: Has been restarted (uptime < 10m)'
+              priority: INFO
+              description: 'The dashboard process started less than 10 minutes ago.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: notice
+        - uuid: '89cba8cecbd545ecb65060085c4e0b99'
+          name: 'Heap used'
+          type: DEPENDENT
+          key: wazuh.dashboard.heap.used
+          delay: '0'
+          units: B
+          description: 'Node.js heap in use.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.metrics.process.memory.heap.used_in_bytes'
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: memory
+        - uuid: b0c2d41b9a3d42a08ea23429b907c2f7
+          name: 'Heap size limit'
+          type: DEPENDENT
+          key: wazuh.dashboard.heap.limit
+          delay: '0'
+          units: B
+          description: 'Maximum Node.js heap size.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.metrics.process.memory.heap.size_limit'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: memory
+        - uuid: '3e7b982f44a646d586722b5c61222a97'
+          name: 'Heap usage'
+          type: DEPENDENT
+          key: wazuh.dashboard.heap.util
+          delay: '0'
+          value_type: FLOAT
+          units: '%'
+          description: 'Node.js heap in use, in % of the heap size limit.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.metrics.process.memory.heap'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var heap = JSON.parse(value);
+
+                  return Math.round(heap.used_in_bytes / heap.size_limit * 10000) / 100;
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: memory
+          triggers:
+            - uuid: d01e75f0581e473cb4be81d1bf825e32
+              expression: 'min(/Wazuh dashboard by HTTP/wazuh.dashboard.heap.util,15m)>{$WAZUH.DASHBOARD.HEAP.MAX.WARN}'
+              name: 'Wazuh dashboard: Heap usage is high'
+              event_name: 'Wazuh dashboard: Heap usage is high (over {$WAZUH.DASHBOARD.HEAP.MAX.WARN}% for 15m)'
+              opdata: 'Used: {ITEM.LASTVALUE1}'
+              priority: WARNING
+              description: 'The Node.js process is close to the heap size limit and can stop with an out of memory error.'
+              tags:
+                - tag: scope
+                  value: capacity
+        - uuid: '55fd1f23523845b7ad650337a5092a3e'
+          name: 'Event loop delay'
+          type: DEPENDENT
+          key: wazuh.dashboard.event_loop_delay
+          delay: '0'
+          value_type: FLOAT
+          units: s
+          description: 'Node.js event loop delay. A high delay makes the dashboard slow for every user.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.metrics.process.event_loop_delay'
+            - type: MULTIPLIER
+              parameters:
+                - '0.001'
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: performance
+        - uuid: '3fc0b095207c42bfb50a8570190d7a15'
+          name: 'Response time, avg'
+          type: DEPENDENT
+          key: wazuh.dashboard.response_time.avg
+          delay: '0'
+          value_type: FLOAT
+          units: s
+          description: 'Average response time of HTTP requests in the last collection interval of the dashboard.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.metrics.response_times.avg_in_millis'
+            - type: MULTIPLIER
+              parameters:
+                - '0.001'
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: performance
+        - uuid: '7b2662b07c6d4564ab29f1c536b873a5'
+          name: 'Response time, max'
+          type: DEPENDENT
+          key: wazuh.dashboard.response_time.max
+          delay: '0'
+          value_type: FLOAT
+          units: s
+          description: 'Maximum response time of HTTP requests in the last collection interval of the dashboard.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.metrics.response_times.max_in_millis'
+            - type: MULTIPLIER
+              parameters:
+                - '0.001'
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: performance
+        - uuid: bff4bd820a2949daa7bc041cbfc9a983
+          name: 'Concurrent connections'
+          type: DEPENDENT
+          key: wazuh.dashboard.connections
+          delay: '0'
+          description: 'Open HTTP connections.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.metrics.concurrent_connections'
+          master_item:
+            key: wazuh.dashboard.get_status
+          tags:
+            - tag: component
+              value: connections
+      discovery_rules:
+        - uuid: d0f735e6fd5944558fd2b9fa51009f77
+          name: 'Plugins discovery'
+          type: DEPENDENT
+          key: wazuh.dashboard.plugin.discovery
+          delay: '0'
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#PLUGIN}'
+                value: '{$WAZUH.DASHBOARD.LLD.FILTER.PLUGIN.MATCHES}'
+                formulaid: A
+              - macro: '{#PLUGIN}'
+                value: '{$WAZUH.DASHBOARD.LLD.FILTER.PLUGIN.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+                formulaid: B
+          description: 'Discovers the core services and plugins listed by the status API.'
+          item_prototypes:
+            - uuid: a59f1853aae6435d846600b210867079
+              name: 'Plugin [{#PLUGIN}]: State'
+              type: DEPENDENT
+              key: 'wazuh.dashboard.plugin.state[{#PLUGIN}]'
+              delay: '0'
+              description: 'State of the plugin or core service.'
+              valuemap:
+                name: 'Wazuh dashboard state'
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var data = JSON.parse(value),
+                      	id = '{#PLUGIN}',
+                      	state = ['green', 'yellow', 'red'],
+                      	found = data.status.statuses.filter(function (status) {
+                      		return status.id.replace(/@[^@]*$/, '') === id;
+                      	});
+
+                      if (found.length === 0) {
+                      	throw 'Plugin ' + id + ' is not listed.';
+                      }
+
+                      return state.indexOf(found[0].state) === -1 ? 255 : state.indexOf(found[0].state);
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - '1h'
+              master_item:
+                key: wazuh.dashboard.get_status
+              tags:
+                - tag: component
+                  value: plugin
+                - tag: plugin
+                  value: '{#PLUGIN}'
+              trigger_prototypes:
+                - uuid: '23447bcfaccb40788d972df13095a4e9'
+                  expression: 'last(/Wazuh dashboard by HTTP/wazuh.dashboard.plugin.state[{#PLUGIN}])<>0'
+                  name: 'Wazuh dashboard: Plugin [{#PLUGIN}] is not green'
+                  opdata: 'State: {ITEM.LASTVALUE1}'
+                  priority: WARNING
+                  description: 'The plugin or core service reports a degraded or failed state.'
+                  dependencies:
+                    - name: 'Wazuh dashboard: State is RED'
+                      expression: 'last(/Wazuh dashboard by HTTP/wazuh.dashboard.state)=2'
+                  tags:
+                    - tag: scope
+                      value: availability
+          master_item:
+            key: wazuh.dashboard.get_status
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value);
+
+                  if (!data.status || !Array.isArray(data.status.statuses)) {
+                  	throw 'No status data.';
+                  }
+
+                  // Status IDs carry the version ("plugin:name@2.19.6"); strip it so that items survive upgrades.
+                  return JSON.stringify(data.status.statuses.map(function (status) {
+                  	return {'{#PLUGIN}': status.id.replace(/@[^@]*$/, '')};
+                  }));
+              error_handler: DISCARD_VALUE
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+      tags:
+        - tag: class
+          value: software
+        - tag: target
+          value: wazuh
+      macros:
+        - macro: '{$WAZUH.DASHBOARD.HEAP.MAX.WARN}'
+          value: '90'
+          description: 'Warning threshold of Node.js heap usage, in % of the heap size limit.'
+        - macro: '{$WAZUH.DASHBOARD.HOST}'
+          value: '<SET WAZUH DASHBOARD HOST>'
+          description: 'Hostname or IP address of the Wazuh dashboard.'
+        - macro: '{$WAZUH.DASHBOARD.LLD.FILTER.PLUGIN.MATCHES}'
+          value: '.*'
+          description: 'Filter of discoverable plugins by status ID.'
+        - macro: '{$WAZUH.DASHBOARD.LLD.FILTER.PLUGIN.NOT_MATCHES}'
+          value: CHANGE_IF_NEEDED
+          description: 'Filter to exclude discovered plugins by status ID.'
+        - macro: '{$WAZUH.DASHBOARD.PASSWORD}'
+          type: SECRET_TEXT
+          description: 'Password of the status API user.'
+        - macro: '{$WAZUH.DASHBOARD.PORT}'
+          value: '443'
+          description: 'Wazuh dashboard port.'
+        - macro: '{$WAZUH.DASHBOARD.RESPONSE_TIME.MAX.WARN}'
+          value: '10s'
+          description: 'Maximum response time of the dashboard port for the trigger expression.'
+        - macro: '{$WAZUH.DASHBOARD.SCHEME}'
+          value: https
+          description: 'Wazuh dashboard scheme (http or https).'
+        - macro: '{$WAZUH.DASHBOARD.USER}'
+          value: ''
+          description: 'User for the status API.'
+      dashboards:
+        - uuid: '16df1706b3964d9fb08d0be54327c877'
+          name: 'Wazuh dashboard'
+          pages:
+            - name: Overview
+              widgets:
+                - type: graph
+                  width: '36'
+                  height: '5'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh dashboard by HTTP'
+                        name: 'Wazuh dashboard: Heap'
+                    - type: STRING
+                      name: reference
+                      value: AAAAA
+                - type: graph
+                  x: '36'
+                  width: '36'
+                  height: '5'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh dashboard by HTTP'
+                        name: 'Wazuh dashboard: Response time'
+                    - type: STRING
+                      name: reference
+                      value: AAAAB
+      valuemaps:
+        - uuid: '5db48d2e248247dbb46542ed4b8d7b29'
+          name: 'Service state'
+          mappings:
+            - value: '0'
+              newvalue: Down
+            - value: '1'
+              newvalue: Up
+        - uuid: '306eaf3f8cb94b61a36f02891b99399a'
+          name: 'Wazuh dashboard state'
+          mappings:
+            - value: '0'
+              newvalue: green
+            - value: '1'
+              newvalue: yellow
+            - value: '2'
+              newvalue: red
+            - value: '255'
+              newvalue: unknown
+  graphs:
+    - uuid: '0da2c5c30f484ba8b6e5d9dd652adb2a'
+      name: 'Wazuh dashboard: Heap'
+      ymin_type_1: FIXED
+      graph_items:
+        - color: '7499FF'
+          item:
+            host: 'Wazuh dashboard by HTTP'
+            key: wazuh.dashboard.heap.used
+        - sortorder: '1'
+          color: E45959
+          item:
+            host: 'Wazuh dashboard by HTTP'
+            key: wazuh.dashboard.heap.limit
+    - uuid: '16056ef0de534983af7b9c6cad81036f'
+      name: 'Wazuh dashboard: Response time'
+      ymin_type_1: FIXED
+      graph_items:
+        - color: '00C48C'
+          item:
+            host: 'Wazuh dashboard by HTTP'
+            key: wazuh.dashboard.response_time.avg
+        - sortorder: '1'
+          color: FFA059
+          item:
+            host: 'Wazuh dashboard by HTTP'
+            key: wazuh.dashboard.response_time.max
+        - sortorder: '2'
+          color: '97AAB3'
+          item:
+            host: 'Wazuh dashboard by HTTP'
+            key: wazuh.dashboard.event_loop_delay

@@ -1,0 +1,754 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: a571c0d144b14fd4a87a9d9b2aa9fcd6
+      name: 'Templates/Applications'
+  templates:
+    - uuid: '007fa391753e4ce4b2cadd843b461dc9'
+      template: 'Wazuh agent by Zabbix agent'
+      name: 'Wazuh agent by Zabbix agent'
+      description: |
+        Monitors a Wazuh agent on Linux with Zabbix agent (passive checks): daemon processes, connection status, event rates and buffer read from the wazuh-agentd state file, and the agent version.
+
+        Setup:
+
+        1. Give the zabbix user read access to the state file and VERSION.json with POSIX ACLs (package acl):
+        "setfacl -m u:zabbix:x /var/ossec /var/ossec/var /var/ossec/var/run"
+        "setfacl -m u:zabbix:r /var/ossec/VERSION.json /var/ossec/var/run/wazuh-agentd.state"
+        "setfacl -d -m u:zabbix:r /var/ossec /var/ossec/var/run"
+        The default ACLs keep the access when Wazuh recreates the files. Do not add zabbix to the wazuh group: that group can write ossec.conf, and Wazuh runs the commands configured there as root.
+        2. Link the template to the host.
+        3. If the agent is installed outside /var/ossec, change {$WAZUH.AGENT.HOME}. If <client_buffer><queue_size> is changed in ossec.conf, set {$WAZUH.AGENT.BUFFER.SIZE} to the same value.
+
+        Works with Zabbix agent and Zabbix agent 2. Tested with Wazuh agent 4.14 and Zabbix 7.0.
+
+        Created by Adam "tick" Pielak, https://wazuh.blog
+      vendor:
+        name: 'Adam "tick" Pielak'
+        version: '7.0-1'
+      groups:
+        - name: 'Templates/Applications'
+      items:
+        - uuid: '2a6d4bd6516c4a9ba0e3fb083be48c4d'
+          name: 'Process [wazuh-agentd]: Number of processes'
+          key: 'proc.num[wazuh-agentd]'
+          delay: '1m'
+          description: 'Number of running wazuh-agentd processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-agentd
+          triggers:
+            - uuid: a5d1b478e7f144f684f0b4a4f88402da
+              expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-agentd])=0'
+              name: 'Wazuh agent: Process wazuh-agentd is not running'
+              priority: HIGH
+              description: 'wazuh-agentd is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: efa0b4cf77df4403b1059656682b0c22
+          name: 'Process [wazuh-execd]: Number of processes'
+          key: 'proc.num[wazuh-execd]'
+          delay: '1m'
+          description: 'Number of running wazuh-execd processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-execd
+          triggers:
+            - uuid: b2998386e3b14fd58b7e734e4603066d
+              expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-execd])=0'
+              name: 'Wazuh agent: Process wazuh-execd is not running'
+              priority: AVERAGE
+              description: 'wazuh-execd is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '9e0f72761ff34651a02a8b14c2e38d73'
+          name: 'Process [wazuh-logcollector]: Number of processes'
+          key: 'proc.num[wazuh-logcollector]'
+          delay: '1m'
+          description: 'Number of running wazuh-logcollector processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-logcollector
+          triggers:
+            - uuid: '69021bec3a5d41088359125f48a444aa'
+              expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-logcollector])=0'
+              name: 'Wazuh agent: Process wazuh-logcollector is not running'
+              priority: AVERAGE
+              description: 'wazuh-logcollector is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '70f58421e318412ea956387fdee455f5'
+          name: 'Process [wazuh-modulesd]: Number of processes'
+          key: 'proc.num[wazuh-modulesd]'
+          delay: '1m'
+          description: 'Number of running wazuh-modulesd processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-modulesd
+          triggers:
+            - uuid: b559d444b32a41a0b8b5b82af34e5b87
+              expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-modulesd])=0'
+              name: 'Wazuh agent: Process wazuh-modulesd is not running'
+              priority: AVERAGE
+              description: 'wazuh-modulesd is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '2f72dfe6b03b4dfebcc5e3416cbc02b7'
+          name: 'Process [wazuh-syscheckd]: Number of processes'
+          key: 'proc.num[wazuh-syscheckd]'
+          delay: '1m'
+          description: 'Number of running wazuh-syscheckd processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-syscheckd
+          triggers:
+            - uuid: '5f59a99d753a4973b120796efc8f7304'
+              expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-syscheckd])=0'
+              name: 'Wazuh agent: Process wazuh-syscheckd is not running'
+              priority: AVERAGE
+              description: 'wazuh-syscheckd is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '909c7c004b83431eb9648bd5053cf5a4'
+          name: 'Get state'
+          key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          delay: '1m'
+          history: '0'
+          value_type: TEXT
+          trends: '0'
+          description: 'Contents of the wazuh-agentd state file. wazuh-agentd rewrites the file every 5 seconds by default (agent.state_interval in internal_options.conf).'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: '0a504ac0634c46bea9810e07a85f73bf'
+          name: 'State file modification time'
+          key: 'vfs.file.time[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state,modify]'
+          delay: '1m'
+          units: unixtime
+          description: 'Last modification time of the wazuh-agentd state file. A file that is no longer updated means wazuh-agentd is stopped or hung.'
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: ddf3792973454aafa97699a17aa89677
+              expression: 'fuzzytime(/Wazuh agent by Zabbix agent/vfs.file.time[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state,modify],{$WAZUH.AGENT.STATE.AGE.MAX.WARN})=0'
+              name: 'Wazuh agent: State file is not updated'
+              event_name: 'Wazuh agent: State file is not updated (for {$WAZUH.AGENT.STATE.AGE.MAX.WARN})'
+              priority: WARNING
+              description: 'wazuh-agentd has not updated its state file. The daemon is hung, or the clock of the host differs from the clock of the Zabbix server.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '3f681d1617034f7a9605b3a18d8dbdc9'
+          name: 'Connection status'
+          type: DEPENDENT
+          key: wazuh.agent.status
+          delay: '0'
+          description: 'Connection status of the agent: connected - a control message was received from the manager in the last 20 seconds, disconnected - no ACK in the last 60 seconds, pending - waiting for the connection.'
+          valuemap:
+            name: 'Wazuh agent status'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var match = value.match(/^status='([^']*)'$/m),
+                  	states = {disconnected: 0, connected: 1, pending: 2};
+
+                  if (match === null) {
+                  	throw 'Cannot find the agent status in the state file.';
+                  }
+
+                  return (match[1] in states) ? states[match[1]] : 255;
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: cf69bfb4cf854200a32cbfb9eda44bac
+              expression: 'count(/Wazuh agent by Zabbix agent/wazuh.agent.status,5m,"eq","1")=0'
+              name: 'Wazuh agent: Not connected to the manager'
+              event_name: 'Wazuh agent: Not connected to the manager (for 5m)'
+              opdata: 'Status: {ITEM.LASTVALUE1}'
+              priority: AVERAGE
+              description: 'The agent was not connected to the manager for 5 minutes. Events are buffered on the host and dropped when the buffer is full. Check the network path to the manager (1514/TCP) and the agent key.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '8225fcbfe124471e8309253d0001927d'
+          name: 'Last keep-alive'
+          type: DEPENDENT
+          key: wazuh.agent.last_keepalive
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Time of the last keep-alive sent to the manager, in the local time of the agent host.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'last_keepalive=''([^'']*)'''
+                - '\1'
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: health
+        - uuid: '871c67d517534edd92e5306f4fc94db6'
+          name: 'Last ACK'
+          type: DEPENDENT
+          key: wazuh.agent.last_ack
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Time of the last control message received from the manager, in the local time of the agent host.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'last_ack=''([^'']*)'''
+                - '\1'
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: health
+        - uuid: '7a8bce24537643f0b1e52d631153dfdd'
+          name: 'Events generated per second'
+          type: DEPENDENT
+          key: wazuh.agent.events.rate
+          delay: '0'
+          value_type: FLOAT
+          units: eps
+          description: 'Events generated by the agent modules.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'msg_count=''([^'']*)'''
+                - '\1'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: events
+        - uuid: '32c00a35b9984f3e9f83fcce1e9f003d'
+          name: 'Messages sent per second'
+          type: DEPENDENT
+          key: wazuh.agent.messages.sent.rate
+          delay: '0'
+          value_type: FLOAT
+          units: mps
+          description: 'Messages (events and control messages) sent to the manager.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'msg_sent=''([^'']*)'''
+                - '\1'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: events
+        - uuid: '2d13f10d569a424ea30144f2ee02b278'
+          name: 'Buffered events'
+          type: DEPENDENT
+          key: wazuh.agent.buffer.events
+          delay: '0'
+          description: 'Events waiting in the anti-flooding buffer. No value when the buffer is disabled (<client_buffer><disabled>yes</disabled>).'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'msg_buffer=''(\d+)'''
+                - '\1'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: events
+          triggers:
+            - uuid: '33d6b6424718495e89492bee1d0fa348'
+              expression: 'min(/Wazuh agent by Zabbix agent/wazuh.agent.buffer.events,5m)>{$WAZUH.AGENT.BUFFER.SIZE}*{$WAZUH.AGENT.BUFFER.UTIL.MAX.WARN}/100'
+              name: 'Wazuh agent: Event buffer usage is high'
+              event_name: 'Wazuh agent: Event buffer usage is high (over {$WAZUH.AGENT.BUFFER.UTIL.MAX.WARN}% for 5m)'
+              opdata: 'Buffered: {ITEM.LASTVALUE1}'
+              priority: WARNING
+              description: 'The anti-flooding buffer is filling up. When it is full, new events are dropped. Set {$WAZUH.AGENT.BUFFER.SIZE} to the <client_buffer><queue_size> of the agent.'
+              tags:
+                - tag: scope
+                  value: performance
+        - uuid: '3acec6ca633a45bc883a48d8f18371bb'
+          name: Version
+          key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/VERSION.json]'
+          delay: '1h'
+          value_type: CHAR
+          trends: '0'
+          description: 'Version of the Wazuh agent, read from VERSION.json.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.version'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          tags:
+            - tag: component
+              value: application
+          triggers:
+            - uuid: afc6a63da269404a92a4193413733ee8
+              expression: 'last(/Wazuh agent by Zabbix agent/vfs.file.contents[{$WAZUH.AGENT.HOME}/VERSION.json],#1)<>last(/Wazuh agent by Zabbix agent/vfs.file.contents[{$WAZUH.AGENT.HOME}/VERSION.json],#2) and length(last(/Wazuh agent by Zabbix agent/vfs.file.contents[{$WAZUH.AGENT.HOME}/VERSION.json]))>0'
+              name: 'Wazuh agent: Version has changed'
+              priority: INFO
+              description: 'The Wazuh agent version has changed. Acknowledge to close the problem manually.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: notice
+      tags:
+        - tag: class
+          value: software
+        - tag: target
+          value: wazuh
+      macros:
+        - macro: '{$WAZUH.AGENT.BUFFER.SIZE}'
+          value: '5000'
+          description: 'Size of the anti-flooding buffer (<client_buffer><queue_size>). The Wazuh default is 5000.'
+        - macro: '{$WAZUH.AGENT.BUFFER.UTIL.MAX.WARN}'
+          value: '80'
+          description: 'Warning threshold of the anti-flooding buffer usage, in %.'
+        - macro: '{$WAZUH.AGENT.HOME}'
+          value: '/var/ossec'
+          description: 'Installation directory of the Wazuh agent.'
+        - macro: '{$WAZUH.AGENT.STATE.AGE.MAX.WARN}'
+          value: '5m'
+          description: 'Maximum age of the wazuh-agentd state file.'
+      valuemaps:
+        - uuid: '295ee6b42fa341878d76aeadc77abfb2'
+          name: 'Wazuh agent status'
+          mappings:
+            - value: '0'
+              newvalue: disconnected
+            - value: '1'
+              newvalue: connected
+            - value: '2'
+              newvalue: pending
+            - value: '255'
+              newvalue: unknown
+    - uuid: fd3933375a0e407a94bc86dbfb515c5b
+      template: 'Wazuh agent by Zabbix agent active'
+      name: 'Wazuh agent by Zabbix agent active'
+      description: |
+        Monitors a Wazuh agent on Linux with Zabbix agent (active checks): daemon processes, connection status, event rates and buffer read from the wazuh-agentd state file, and the agent version.
+
+        Setup:
+
+        1. Give the zabbix user read access to the state file and VERSION.json with POSIX ACLs (package acl):
+        "setfacl -m u:zabbix:x /var/ossec /var/ossec/var /var/ossec/var/run"
+        "setfacl -m u:zabbix:r /var/ossec/VERSION.json /var/ossec/var/run/wazuh-agentd.state"
+        "setfacl -d -m u:zabbix:r /var/ossec /var/ossec/var/run"
+        The default ACLs keep the access when Wazuh recreates the files. Do not add zabbix to the wazuh group: that group can write ossec.conf, and Wazuh runs the commands configured there as root.
+        2. Link the template to the host.
+        3. If the agent is installed outside /var/ossec, change {$WAZUH.AGENT.HOME}. If <client_buffer><queue_size> is changed in ossec.conf, set {$WAZUH.AGENT.BUFFER.SIZE} to the same value.
+
+        Works with Zabbix agent and Zabbix agent 2. Tested with Wazuh agent 4.14 and Zabbix 7.0.
+
+        Created by Adam "tick" Pielak, https://wazuh.blog
+      vendor:
+        name: 'Adam "tick" Pielak'
+        version: '7.0-1'
+      groups:
+        - name: 'Templates/Applications'
+      items:
+        - uuid: bf5de199d8734508b1968351e9cfc1f0
+          name: 'Process [wazuh-agentd]: Number of processes'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[wazuh-agentd]'
+          delay: '1m'
+          description: 'Number of running wazuh-agentd processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-agentd
+          triggers:
+            - uuid: '27dd38677bcb4b38a7ef31665b00bd61'
+              expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-agentd])=0'
+              name: 'Wazuh agent: Process wazuh-agentd is not running'
+              priority: HIGH
+              description: 'wazuh-agentd is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: adbf3a0ebf994cdca0efc817b46c8c08
+          name: 'Process [wazuh-execd]: Number of processes'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[wazuh-execd]'
+          delay: '1m'
+          description: 'Number of running wazuh-execd processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-execd
+          triggers:
+            - uuid: '538841940ab0411888238d0e89ccd1f0'
+              expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-execd])=0'
+              name: 'Wazuh agent: Process wazuh-execd is not running'
+              priority: AVERAGE
+              description: 'wazuh-execd is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '37fdf81e6a7241c6a409715b4f55180a'
+          name: 'Process [wazuh-logcollector]: Number of processes'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[wazuh-logcollector]'
+          delay: '1m'
+          description: 'Number of running wazuh-logcollector processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-logcollector
+          triggers:
+            - uuid: '4d42cdd352424af69376f7326a3e81ac'
+              expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-logcollector])=0'
+              name: 'Wazuh agent: Process wazuh-logcollector is not running'
+              priority: AVERAGE
+              description: 'wazuh-logcollector is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '26560eea404d4e908590fe23951a7eaa'
+          name: 'Process [wazuh-modulesd]: Number of processes'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[wazuh-modulesd]'
+          delay: '1m'
+          description: 'Number of running wazuh-modulesd processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-modulesd
+          triggers:
+            - uuid: c9cb20229a4f47438f20c10f132339a5
+              expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-modulesd])=0'
+              name: 'Wazuh agent: Process wazuh-modulesd is not running'
+              priority: AVERAGE
+              description: 'wazuh-modulesd is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '18081ba01e444434abe13e7663e0f963'
+          name: 'Process [wazuh-syscheckd]: Number of processes'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[wazuh-syscheckd]'
+          delay: '1m'
+          description: 'Number of running wazuh-syscheckd processes.'
+          tags:
+            - tag: component
+              value: system
+            - tag: process
+              value: wazuh-syscheckd
+          triggers:
+            - uuid: '8c42e59029064ca5865a2810fc5cc915'
+              expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-syscheckd])=0'
+              name: 'Wazuh agent: Process wazuh-syscheckd is not running'
+              priority: AVERAGE
+              description: 'wazuh-syscheckd is not running. Check "systemctl status wazuh-agent" and /var/ossec/logs/ossec.log on the host.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: e388daf5501f41f3ab7f30e005736a31
+          name: 'Get state'
+          type: ZABBIX_ACTIVE
+          key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          delay: '1m'
+          history: '0'
+          value_type: TEXT
+          trends: '0'
+          description: 'Contents of the wazuh-agentd state file. wazuh-agentd rewrites the file every 5 seconds by default (agent.state_interval in internal_options.conf).'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: '16c834f656894eb0b12903a344b19ad3'
+          name: 'State file modification time'
+          type: ZABBIX_ACTIVE
+          key: 'vfs.file.time[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state,modify]'
+          delay: '1m'
+          units: unixtime
+          description: 'Last modification time of the wazuh-agentd state file. A file that is no longer updated means wazuh-agentd is stopped or hung.'
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: eb48876bfeff48cda0dbff1ace4daac8
+              expression: 'fuzzytime(/Wazuh agent by Zabbix agent active/vfs.file.time[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state,modify],{$WAZUH.AGENT.STATE.AGE.MAX.WARN})=0'
+              name: 'Wazuh agent: State file is not updated'
+              event_name: 'Wazuh agent: State file is not updated (for {$WAZUH.AGENT.STATE.AGE.MAX.WARN})'
+              priority: WARNING
+              description: 'wazuh-agentd has not updated its state file. The daemon is hung, or the clock of the host differs from the clock of the Zabbix server.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: fcbe0805f85b41d3824dc4fe449077de
+          name: 'Connection status'
+          type: DEPENDENT
+          key: wazuh.agent.status
+          delay: '0'
+          description: 'Connection status of the agent: connected - a control message was received from the manager in the last 20 seconds, disconnected - no ACK in the last 60 seconds, pending - waiting for the connection.'
+          valuemap:
+            name: 'Wazuh agent status'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var match = value.match(/^status='([^']*)'$/m),
+                  	states = {disconnected: 0, connected: 1, pending: 2};
+
+                  if (match === null) {
+                  	throw 'Cannot find the agent status in the state file.';
+                  }
+
+                  return (match[1] in states) ? states[match[1]] : 255;
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: ab9dd895044a456db079d30c98367fa1
+              expression: 'count(/Wazuh agent by Zabbix agent active/wazuh.agent.status,5m,"eq","1")=0'
+              name: 'Wazuh agent: Not connected to the manager'
+              event_name: 'Wazuh agent: Not connected to the manager (for 5m)'
+              opdata: 'Status: {ITEM.LASTVALUE1}'
+              priority: AVERAGE
+              description: 'The agent was not connected to the manager for 5 minutes. Events are buffered on the host and dropped when the buffer is full. Check the network path to the manager (1514/TCP) and the agent key.'
+              dependencies:
+                - name: 'Wazuh agent: Process wazuh-agentd is not running'
+                  expression: 'last(/Wazuh agent by Zabbix agent active/proc.num[wazuh-agentd])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '2815a9674d9647d6a0da7a34c351ad49'
+          name: 'Last keep-alive'
+          type: DEPENDENT
+          key: wazuh.agent.last_keepalive
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Time of the last keep-alive sent to the manager, in the local time of the agent host.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'last_keepalive=''([^'']*)'''
+                - '\1'
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: health
+        - uuid: edb4829248f54aa18cbf456379399d3c
+          name: 'Last ACK'
+          type: DEPENDENT
+          key: wazuh.agent.last_ack
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Time of the last control message received from the manager, in the local time of the agent host.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'last_ack=''([^'']*)'''
+                - '\1'
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: health
+        - uuid: f36706cab05c4b71aadc024b93046522
+          name: 'Events generated per second'
+          type: DEPENDENT
+          key: wazuh.agent.events.rate
+          delay: '0'
+          value_type: FLOAT
+          units: eps
+          description: 'Events generated by the agent modules.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'msg_count=''([^'']*)'''
+                - '\1'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: events
+        - uuid: '17d2f21623f742228d41bc6ada60d7a6'
+          name: 'Messages sent per second'
+          type: DEPENDENT
+          key: wazuh.agent.messages.sent.rate
+          delay: '0'
+          value_type: FLOAT
+          units: mps
+          description: 'Messages (events and control messages) sent to the manager.'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'msg_sent=''([^'']*)'''
+                - '\1'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: events
+        - uuid: a1a4938cc6a54163baf1e45a85aa5d31
+          name: 'Buffered events'
+          type: DEPENDENT
+          key: wazuh.agent.buffer.events
+          delay: '0'
+          description: 'Events waiting in the anti-flooding buffer. No value when the buffer is disabled (<client_buffer><disabled>yes</disabled>).'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - 'msg_buffer=''(\d+)'''
+                - '\1'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/var/run/wazuh-agentd.state]'
+          tags:
+            - tag: component
+              value: events
+          triggers:
+            - uuid: '0974263bed174af29300cb1b7e7137e5'
+              expression: 'min(/Wazuh agent by Zabbix agent active/wazuh.agent.buffer.events,5m)>{$WAZUH.AGENT.BUFFER.SIZE}*{$WAZUH.AGENT.BUFFER.UTIL.MAX.WARN}/100'
+              name: 'Wazuh agent: Event buffer usage is high'
+              event_name: 'Wazuh agent: Event buffer usage is high (over {$WAZUH.AGENT.BUFFER.UTIL.MAX.WARN}% for 5m)'
+              opdata: 'Buffered: {ITEM.LASTVALUE1}'
+              priority: WARNING
+              description: 'The anti-flooding buffer is filling up. When it is full, new events are dropped. Set {$WAZUH.AGENT.BUFFER.SIZE} to the <client_buffer><queue_size> of the agent.'
+              tags:
+                - tag: scope
+                  value: performance
+        - uuid: '681ca0c5e6b048eaa35f0e61c47f2a7a'
+          name: Version
+          type: ZABBIX_ACTIVE
+          key: 'vfs.file.contents[{$WAZUH.AGENT.HOME}/VERSION.json]'
+          delay: '1h'
+          value_type: CHAR
+          trends: '0'
+          description: 'Version of the Wazuh agent, read from VERSION.json.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.version'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          tags:
+            - tag: component
+              value: application
+          triggers:
+            - uuid: ea1f9ce6e0474b118576d1944e9ad70f
+              expression: 'last(/Wazuh agent by Zabbix agent active/vfs.file.contents[{$WAZUH.AGENT.HOME}/VERSION.json],#1)<>last(/Wazuh agent by Zabbix agent active/vfs.file.contents[{$WAZUH.AGENT.HOME}/VERSION.json],#2) and length(last(/Wazuh agent by Zabbix agent active/vfs.file.contents[{$WAZUH.AGENT.HOME}/VERSION.json]))>0'
+              name: 'Wazuh agent: Version has changed'
+              priority: INFO
+              description: 'The Wazuh agent version has changed. Acknowledge to close the problem manually.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: notice
+      tags:
+        - tag: class
+          value: software
+        - tag: target
+          value: wazuh
+      macros:
+        - macro: '{$WAZUH.AGENT.BUFFER.SIZE}'
+          value: '5000'
+          description: 'Size of the anti-flooding buffer (<client_buffer><queue_size>). The Wazuh default is 5000.'
+        - macro: '{$WAZUH.AGENT.BUFFER.UTIL.MAX.WARN}'
+          value: '80'
+          description: 'Warning threshold of the anti-flooding buffer usage, in %.'
+        - macro: '{$WAZUH.AGENT.HOME}'
+          value: '/var/ossec'
+          description: 'Installation directory of the Wazuh agent.'
+        - macro: '{$WAZUH.AGENT.STATE.AGE.MAX.WARN}'
+          value: '5m'
+          description: 'Maximum age of the wazuh-agentd state file.'
+      valuemaps:
+        - uuid: fa9935f122cf4491b4a0fa310aa27dc4
+          name: 'Wazuh agent status'
+          mappings:
+            - value: '0'
+              newvalue: disconnected
+            - value: '1'
+              newvalue: connected
+            - value: '2'
+              newvalue: pending
+            - value: '255'
+              newvalue: unknown

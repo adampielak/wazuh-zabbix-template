@@ -1,0 +1,1818 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: a571c0d144b14fd4a87a9d9b2aa9fcd6
+      name: 'Templates/Applications'
+  templates:
+    - uuid: '4f2968d657434a9e92e12c876619782b'
+      template: 'Wazuh manager by HTTP'
+      name: 'Wazuh manager by HTTP'
+      description: |
+        Monitors a Wazuh server (manager) node through the Wazuh server API: API availability, daemon states, analysisd and remoted statistics, configuration validation and cluster state.
+        On the master node or on a standalone manager it also collects agent connection summary, cluster node health, ruleset synchronization and available updates.
+
+        Setup:
+
+        1. Create a read-only Wazuh API user, for example "zbx_monitor", with read-only policies: manager:read and cluster:status on *:*:*, cluster:read on node:id:*, agent:read on agent:id:*. The README in the repository root has the API calls.
+        2. Link the template to a host and set {$WAZUH.API.HOST} to the Wazuh server node. Link it to one host per cluster node: node-local data is collected on each node, cluster-wide data on the master only.
+        3. Set {$WAZUH.API.USER} and {$WAZUH.API.PASSWORD}. Change {$WAZUH.API.SCHEME} and {$WAZUH.API.PORT} if the API does not listen on https:55000.
+        4. Wazuh generates self-signed certificates by default, so {$HTTP.TLS.VERIFY} defaults to "none". Set it to "full" if the API certificate is trusted by the Zabbix server or proxy.
+
+        Tested with Wazuh 4.14 and Zabbix 7.0.
+
+        Created by Adam "tick" Pielak, https://wazuh.blog
+      vendor:
+        name: 'Adam "tick" Pielak'
+        version: '7.0-1'
+      groups:
+        - name: 'Templates/Applications'
+      items:
+        - uuid: '30909edd36d64b71a04a5d780c9c2d0d'
+          name: 'Get API data'
+          type: SCRIPT
+          key: wazuh.manager.get
+          delay: '{$WAZUH.DATA.INTERVAL}'
+          history: '0'
+          value_type: TEXT
+          trends: '0'
+          params: |
+            const CTlsConfig = function (raw_value) {
+            	raw_value = String(raw_value).trim().toLowerCase();
+
+            	if (['none', 'peer', 'full'].indexOf(raw_value) === -1) {
+            		raw_value = 'full';
+            	}
+
+            	this.options = {
+            		SSLVerifyPeer: (raw_value === 'peer' || raw_value === 'full'),
+            		SSLVerifyHost: (raw_value === 'full')
+            	};
+
+            	this.enabled = (raw_value !== 'none');
+
+            	this.checkURL = function (url) {
+            		if (this.enabled && !/^https:\/\//i.test(url)) {
+            			throw 'TLS certificate verification is enabled by {$' + 'HTTP.TLS.VERIFY}, but the URL uses plain HTTP: ' + url +
+            			'. Use an "https://" URL, or set {$' + 'HTTP.TLS.VERIFY} to `none` to disable verification.';
+            		}
+
+            		return url;
+            	};
+            };
+
+            var Wazuh = {
+            	params: {},
+            	http: null,
+            	token: null,
+
+            	setParams: function (params) {
+            		['api_url', 'user', 'password'].forEach(function (field) {
+            			if (typeof params !== 'object' || typeof params[field] === 'undefined' || params[field] === '') {
+            				throw 'Required param is not set: "' + field + '".';
+            			}
+            		});
+
+            		Wazuh.params = params;
+            		Wazuh.params.api_url = String(params.api_url).replace(/\/+$/, '');
+            	},
+
+            	init: function () {
+            		var tls = new CTlsConfig(Wazuh.params.tls_verify);
+
+            		tls.checkURL(Wazuh.params.api_url);
+            		Wazuh.http = new HttpRequest(tls.options);
+
+            		if (typeof Wazuh.params.http_proxy === 'string' && Wazuh.params.http_proxy !== '') {
+            			Wazuh.http.setProxy(Wazuh.params.http_proxy);
+            		}
+            	},
+
+            	request: function (method, path) {
+            		var url = Wazuh.params.api_url + path,
+            			response,
+            			status,
+            			detail = '';
+
+            		Wazuh.http.clearHeader();
+            		if (Wazuh.token === null) {
+            			Wazuh.http.addHeader('Authorization: Basic ' + btoa(Wazuh.params.user + ':' + Wazuh.params.password));
+            		}
+            		else {
+            			Wazuh.http.addHeader('Authorization: Bearer ' + Wazuh.token);
+            		}
+
+            		Zabbix.log(4, '[ Wazuh ] Sending request: ' + method + ' ' + url);
+            		response = (method === 'POST') ? Wazuh.http.post(url, '') : Wazuh.http.get(url);
+            		status = Wazuh.http.getStatus();
+            		Zabbix.log(4, '[ Wazuh ] Received response with status code ' + status + ' for ' + path);
+
+            		if (status !== 200) {
+            			try {
+            				var body = JSON.parse(response);
+
+            				detail = body.detail || body.title || '';
+            			}
+            			catch (error) {
+            				// Not a JSON error body.
+            			}
+
+            			throw 'Request ' + method + ' ' + path + ' failed with status code ' + status + (detail ? ': ' + detail : '') + '.';
+            		}
+
+            		if (response === null || response === '') {
+            			throw 'Empty response for ' + method + ' ' + path + '.';
+            		}
+
+            		return response;
+            	},
+
+            	get: function (path) {
+            		var body;
+
+            		try {
+            			body = JSON.parse(Wazuh.request('GET', path));
+            		}
+            		catch (error) {
+            			throw (typeof error === 'string') ? error : 'Failed to parse the response of ' + path + '.';
+            		}
+
+            		if (typeof body.data === 'undefined') {
+            			throw 'Unexpected response of ' + path + ': no "data" field.';
+            		}
+
+            		return body.data;
+            	},
+
+            	login: function () {
+            		Wazuh.token = Wazuh.request('POST', '/security/user/authenticate?raw=true');
+            	}
+            };
+
+            // Wazuh returns timestamps with microseconds; ECMAScript Date.parse accepts milliseconds only.
+            function parseDate(value) {
+            	return Date.parse(String(value).replace(/(\.\d{3})\d+/, '$1'));
+            }
+
+            function sumLeaves(object) {
+            	var total = 0;
+
+            	Object.keys(object || {}).forEach(function (key) {
+            		var value = object[key];
+
+            		if (typeof value === 'number') {
+            			total += value;
+            		}
+            		else if (value !== null && typeof value === 'object') {
+            			total += sumLeaves(value);
+            		}
+            	});
+
+            	return total;
+            }
+
+            function round(value) {
+            	return Math.round(value * 100) / 100;
+            }
+
+            var result = {api: {available: 0, version: ''}, error: ''},
+            	errors = [];
+
+            function collect(section, callback) {
+            	try {
+            		callback();
+            	}
+            	catch (error) {
+            		errors.push(section + ': ' + error);
+            		Zabbix.log(3, '[ Wazuh ] Failed to collect "' + section + '": ' + error);
+            	}
+            }
+
+            Wazuh.setParams(JSON.parse(value));
+            Wazuh.init();
+
+            try {
+            	Wazuh.login();
+            	result.api.available = 1;
+            }
+            catch (error) {
+            	result.error = 'login: ' + error;
+            	Zabbix.log(3, '[ Wazuh ] Login failed: ' + error);
+
+            	return JSON.stringify(result);
+            }
+
+            collect('api', function () {
+            	result.api.version = Wazuh.get('/').api_version;
+            });
+
+            collect('manager', function () {
+            	var info = Wazuh.get('/manager/info').affected_items[0];
+
+            	result.manager = {version: String(info.version).replace(/^v/, ''), type: info.type};
+            });
+
+            collect('daemons', function () {
+            	var status = Wazuh.get('/manager/status').affected_items[0];
+
+            	result.daemons = {};
+            	Object.keys(status).forEach(function (name) {
+            		result.daemons[name] = (status[name] === 'running') ? 1 : ((status[name] === 'stopped') ? 0 : 2);
+            	});
+            });
+
+            collect('stats', function () {
+            	Wazuh.get('/manager/daemons/stats').affected_items.forEach(function (daemon) {
+            		var metrics = daemon.metrics || {};
+
+            		metrics.uptime = Math.max(0, Math.round((parseDate(daemon.timestamp) - parseDate(daemon.uptime)) / 1000));
+            		result[String(daemon.name).replace(/^wazuh-/, '')] = metrics;
+            	});
+
+            	if (result.analysisd) {
+            		var events = result.analysisd.events || {},
+            			queues = result.analysisd.queues || {};
+
+            		events.dropped_total = sumLeaves((events.received_breakdown || {}).dropped_breakdown);
+            		// analysisd reports queue usage as a ratio (0..1).
+            		Object.keys(queues).forEach(function (name) {
+            			queues[name].pct = round(queues[name].usage * 100);
+            		});
+            	}
+
+            	if (result.remoted && result.remoted.queues && result.remoted.queues.received) {
+            		var received = result.remoted.queues.received;
+
+            		// remoted reports queue usage as a number of messages.
+            		received.pct = (received.size > 0) ? round(received.usage / received.size * 100) : 0;
+            	}
+            });
+
+            collect('cluster', function () {
+            	var status = Wazuh.get('/cluster/status');
+
+            	result.cluster = {
+            		enabled: (status.enabled === 'yes') ? 1 : 0,
+            		running: (status.running === 'yes') ? 1 : 0,
+            		name: '',
+            		node: '',
+            		role: 'standalone'
+            	};
+
+            	if (result.cluster.running === 1) {
+            		var local = Wazuh.get('/cluster/local/info').affected_items[0];
+
+            		result.cluster.name = local.cluster;
+            		result.cluster.node = local.node;
+            		result.cluster.role = local.type;
+            	}
+            });
+
+            collect('configuration', function () {
+            	var validation = Wazuh.get('/manager/configuration/validation'),
+            		valid = (validation.total_failed_items === 0);
+
+            	(validation.affected_items || []).forEach(function (node) {
+            		if (node.status !== 'OK') {
+            			valid = false;
+            		}
+            	});
+            	result.configuration = {valid: valid ? 1 : 0};
+            });
+
+            // Cluster-wide data is read on the master or on a standalone manager only.
+            if (result.cluster && result.cluster.role !== 'worker') {
+            	collect('agents', function () {
+            		var summary = Wazuh.get('/agents/summary/status'),
+            			agents = summary.connection;
+
+            		agents.not_synced = summary.configuration.not_synced;
+            		agents.disconnected_pct = (agents.total > 0) ? round(agents.disconnected / agents.total * 100) : 0;
+            		result.agents = agents;
+            	});
+
+            	collect('updates', function () {
+            		var check = Wazuh.get('/manager/version/check');
+
+            		result.updates = {
+            			enabled: check.update_check ? 1 : 0,
+            			latest: (check.last_available_major || {}).tag || (check.last_available_minor || {}).tag
+            				|| (check.last_available_patch || {}).tag || ''
+            		};
+            	});
+
+            	result.nodes = [];
+            	if (result.cluster.running === 1) {
+            		collect('nodes', function () {
+            			var now = Date.now();
+
+            			result.nodes = Wazuh.get('/cluster/healthcheck').affected_items.map(function (node) {
+            				var status = node.status || {};
+
+            				return {
+            					name: node.info.name,
+            					type: node.info.type,
+            					version: node.info.version,
+            					active_agents: node.info.n_active_agents,
+            					keepalive_age: status.last_keep_alive
+            						? Math.max(0, Math.round((now - parseDate(status.last_keep_alive)) / 1000))
+            						: null,
+            					ruleset_synced: null
+            				};
+            			});
+            		});
+
+            		collect('ruleset', function () {
+            			Wazuh.get('/cluster/ruleset/synchronization').affected_items.forEach(function (sync) {
+            				result.nodes.forEach(function (node) {
+            					if (node.name === sync.name) {
+            						node.ruleset_synced = sync.synced ? 1 : 0;
+            					}
+            				});
+            			});
+            		});
+            	}
+            }
+
+            result.error = errors.join('\n');
+
+            return JSON.stringify(result);
+          parameters:
+            - name: api_url
+              value: '{$WAZUH.API.SCHEME}://{$WAZUH.API.HOST}:{$WAZUH.API.PORT}'
+            - name: http_proxy
+              value: '{$WAZUH.HTTP_PROXY}'
+            - name: password
+              value: '{$WAZUH.API.PASSWORD}'
+            - name: tls_verify
+              value: '{$HTTP.TLS.VERIFY:"Wazuh"}'
+            - name: user
+              value: '{$WAZUH.API.USER}'
+          timeout: '30s'
+          description: 'Logs in to the Wazuh server API and collects manager, daemon, statistics and cluster data in one JSON document. A failed API section is reported in the "API errors" item and does not stop the other sections.'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: '83b2d042ed6a49feb6d3cdddc198f8b2'
+          name: 'API availability'
+          type: DEPENDENT
+          key: wazuh.api.available
+          delay: '0'
+          description: 'Result of the login to the Wazuh server API: 1 - logged in, 0 - connection or authentication failed.'
+          valuemap:
+            name: 'Service state'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.api.available'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: '682339515649451eb681b8893cb92b98'
+              expression: 'max(/Wazuh manager by HTTP/wazuh.api.available,3m)=0'
+              name: 'Wazuh: API is not available'
+              priority: AVERAGE
+              description: 'Login to the Wazuh server API failed for 3 minutes. Check the "API errors" item, wazuh-apid on the node, the network path and the API credentials.'
+              tags:
+                - tag: scope
+                  value: availability
+            - uuid: '53e46697b3d2451291aaaf05e19bec68'
+              expression: 'nodata(/Wazuh manager by HTTP/wazuh.api.available,30m)=1'
+              name: 'Wazuh: Failed to fetch API data'
+              event_name: 'Wazuh: Failed to fetch API data (or no data for 30m)'
+              priority: WARNING
+              description: 'The script item returned no data for 30 minutes. Check the item error and the Zabbix server or proxy log.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '60f66dd5db804417844d8cb07a4618e3'
+          name: 'API errors'
+          type: DEPENDENT
+          key: wazuh.api.errors
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: 'Errors returned by the API requests of the last collection. Empty when all requests succeeded.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.error'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: fecc26a5d67d448a9cef94e4a408b09f
+              expression: 'length(last(/Wazuh manager by HTTP/wazuh.api.errors))>0'
+              name: 'Wazuh: API requests returned errors'
+              opdata: '{ITEM.LASTVALUE1}'
+              priority: INFO
+              description: 'One or more API requests failed. The items fed by that request have no new data. A common cause is a missing RBAC permission of the monitoring user.'
+              dependencies:
+                - name: 'Wazuh: API is not available'
+                  expression: 'max(/Wazuh manager by HTTP/wazuh.api.available,3m)=0'
+              tags:
+                - tag: scope
+                  value: notice
+        - uuid: ab679b2372924c3b9b52babf705765f3
+          name: 'API version'
+          type: DEPENDENT
+          key: wazuh.api.version
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Version of the Wazuh server API.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.api.version'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: application
+        - uuid: '87abffeb1ffa4a2c8c0635d577eb65af'
+          name: Version
+          type: DEPENDENT
+          key: wazuh.manager.version
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Version of the Wazuh manager.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.manager.version'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: application
+          triggers:
+            - uuid: '6789ffa6ea774245ad3b285a25b06b9e'
+              expression: 'last(/Wazuh manager by HTTP/wazuh.manager.version,#1)<>last(/Wazuh manager by HTTP/wazuh.manager.version,#2) and length(last(/Wazuh manager by HTTP/wazuh.manager.version))>0'
+              name: 'Wazuh: Version has changed'
+              priority: INFO
+              description: 'The Wazuh manager version has changed. Acknowledge to close the problem manually.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: notice
+        - uuid: '316da49c5a4c40a1bb93625fa124e0c2'
+          name: 'Configuration status'
+          type: DEPENDENT
+          key: wazuh.manager.config.valid
+          delay: '0'
+          description: 'Result of the Wazuh configuration validation (GET /manager/configuration/validation).'
+          valuemap:
+            name: 'Wazuh configuration status'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.configuration.valid'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: configuration
+          triggers:
+            - uuid: ddef212113944e0ebb2c4a10c8a98ecd
+              expression: 'last(/Wazuh manager by HTTP/wazuh.manager.config.valid)=0'
+              name: 'Wazuh: Configuration is not valid'
+              priority: AVERAGE
+              description: 'GET /manager/configuration/validation reports an error. The manager will fail to start with the current ossec.conf. Run /var/ossec/bin/wazuh-analysisd -t on the node.'
+              tags:
+                - tag: scope
+                  value: notice
+        - uuid: cdf734dfad004cb7bc56732c1ec5e3e6
+          name: 'Cluster: Enabled'
+          type: DEPENDENT
+          key: wazuh.cluster.enabled
+          delay: '0'
+          description: 'Whether the cluster is enabled in the manager configuration.'
+          valuemap:
+            name: 'Wazuh boolean'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.cluster.enabled'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: cluster
+        - uuid: c0bff2c5112f44f49d8ff874d9935b83
+          name: 'Cluster: Running'
+          type: DEPENDENT
+          key: wazuh.cluster.running
+          delay: '0'
+          description: 'Whether the cluster daemon is running.'
+          valuemap:
+            name: 'Wazuh boolean'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.cluster.running'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: cluster
+        - uuid: '6085251294364f7fa25888774a1f46f6'
+          name: 'Cluster: Node role'
+          type: DEPENDENT
+          key: wazuh.cluster.role
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Role of this node: master, worker or standalone.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.cluster.role'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: cluster
+        - uuid: '0357ccaffd884ae7b8053c0c8f888c3a'
+          name: 'Cluster: Node name'
+          type: DEPENDENT
+          key: wazuh.cluster.node
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Name of this node in the cluster. Empty on a standalone manager.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.cluster.node'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: cluster
+        - uuid: '558dd5d6a6a04742a482644338d47b29'
+          name: 'Cluster: Name'
+          type: DEPENDENT
+          key: wazuh.cluster.name
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Name of the cluster. Empty on a standalone manager.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.cluster.name'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: cluster
+        - uuid: '9c5bbf9ea93b468a84b9036933fa1ecc'
+          name: 'Analysisd: Uptime'
+          type: DEPENDENT
+          key: wazuh.analysisd.uptime
+          delay: '0'
+          units: uptime
+          description: 'Time since wazuh-analysisd started.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.analysisd.uptime'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: analysisd
+          triggers:
+            - uuid: ab69bd6afd8d419da4224c2045909e61
+              expression: 'last(/Wazuh manager by HTTP/wazuh.analysisd.uptime)<10m'
+              name: 'Wazuh: Analysisd has been restarted'
+              event_name: 'Wazuh: Analysisd has been restarted (uptime < 10m)'
+              priority: INFO
+              description: 'wazuh-analysisd started less than 10 minutes ago.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: notice
+        - uuid: '3ac47bf187ee4381aaf004e2560d9c8a'
+          name: 'Analysisd: Events received per second'
+          type: DEPENDENT
+          key: wazuh.analysisd.events.received.rate
+          delay: '0'
+          value_type: FLOAT
+          units: eps
+          description: 'Events received by wazuh-analysisd.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.analysisd.events.received'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: analysisd
+        - uuid: f317da0533ae45409abfad2dce8a3139
+          name: 'Analysisd: Events processed per second'
+          type: DEPENDENT
+          key: wazuh.analysisd.events.processed.rate
+          delay: '0'
+          value_type: FLOAT
+          units: eps
+          description: 'Events processed by the rule engine.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.analysisd.events.processed'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: analysisd
+        - uuid: cec4bd32c4214892a22b83c4932ce976
+          name: 'Analysisd: Events dropped per second'
+          type: DEPENDENT
+          key: wazuh.analysisd.events.dropped.rate
+          delay: '0'
+          value_type: FLOAT
+          units: eps
+          description: 'Events dropped by wazuh-analysisd because an input queue was full. Sum of all counters in events.received_breakdown.dropped_breakdown.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.analysisd.events.dropped_total'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: analysisd
+          triggers:
+            - uuid: '0ca168b76d70467db286f1fd5a132bb1'
+              expression: 'min(/Wazuh manager by HTTP/wazuh.analysisd.events.dropped.rate,5m)>0'
+              name: 'Wazuh: Analysisd is dropping events'
+              opdata: 'Dropped: {ITEM.LASTVALUE1}'
+              priority: WARNING
+              description: 'wazuh-analysisd dropped events for 5 minutes because input queues were full. Events that are dropped do not generate alerts. Check the analysisd queue utilization and the event rate.'
+              tags:
+                - tag: scope
+                  value: performance
+        - uuid: '862822d74de44c01b3f94ec1c48767a7'
+          name: 'Analysisd: Alerts written per second'
+          type: DEPENDENT
+          key: wazuh.analysisd.alerts.written.rate
+          delay: '0'
+          value_type: FLOAT
+          units: eps
+          description: 'Alerts written to alerts.log and alerts.json.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.analysisd.events.written_breakdown.alerts'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: analysisd
+        - uuid: bf0885500c234b42a09bcaf822ca961c
+          name: 'Analysisd: Archives written per second'
+          type: DEPENDENT
+          key: wazuh.analysisd.archives.written.rate
+          delay: '0'
+          value_type: FLOAT
+          units: eps
+          description: 'Events written to the archives. Zero when logall and logall_json are disabled.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.analysisd.events.written_breakdown.archives'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: analysisd
+        - uuid: '9bdc72d1501d43ff9e0d469f90ecec99'
+          name: 'Analysisd: Firewall events written per second'
+          type: DEPENDENT
+          key: wazuh.analysisd.firewall.written.rate
+          delay: '0'
+          value_type: FLOAT
+          units: eps
+          description: 'Events written to the firewall log.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.analysisd.events.written_breakdown.firewall'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: analysisd
+        - uuid: d3d1fc42b5734d8f836a9a5024e466f6
+          name: 'Analysisd: Bytes received per second'
+          type: DEPENDENT
+          key: wazuh.analysisd.bytes.received.rate
+          delay: '0'
+          value_type: FLOAT
+          units: Bps
+          description: 'Bytes received by wazuh-analysisd.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.analysisd.bytes.received'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: analysisd
+        - uuid: '2ffdb60cd8a343539642d5c3e13bcf8c'
+          name: 'Remoted: Uptime'
+          type: DEPENDENT
+          key: wazuh.remoted.uptime
+          delay: '0'
+          units: uptime
+          description: 'Time since wazuh-remoted started.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.uptime'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+          triggers:
+            - uuid: '07490e9abdde490c8165fc806d9cbaee'
+              expression: 'last(/Wazuh manager by HTTP/wazuh.remoted.uptime)<10m'
+              name: 'Wazuh: Remoted has been restarted'
+              event_name: 'Wazuh: Remoted has been restarted (uptime < 10m)'
+              priority: INFO
+              description: 'wazuh-remoted started less than 10 minutes ago.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: notice
+        - uuid: c839eb9e6f704d7d90e570992f52286c
+          name: 'Remoted: TCP sessions'
+          type: DEPENDENT
+          key: wazuh.remoted.tcp_sessions
+          delay: '0'
+          description: 'Open TCP sessions with agents.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.tcp_sessions'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+        - uuid: '8ba5aca04801402e956f1e8655e5f1c9'
+          name: 'Remoted: Bytes received per second'
+          type: DEPENDENT
+          key: wazuh.remoted.bytes.received.rate
+          delay: '0'
+          value_type: FLOAT
+          units: Bps
+          description: 'Bytes received from agents.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.bytes.received'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+        - uuid: '1652b6d4199a4a6483bf2c6537344464'
+          name: 'Remoted: Bytes sent per second'
+          type: DEPENDENT
+          key: wazuh.remoted.bytes.sent.rate
+          delay: '0'
+          value_type: FLOAT
+          units: Bps
+          description: 'Bytes sent to agents.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.bytes.sent'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+        - uuid: '332b67d8c2ce46fcb8dc7c5b8dc2a58d'
+          name: 'Remoted: Event messages per second'
+          type: DEPENDENT
+          key: wazuh.remoted.messages.event.rate
+          delay: '0'
+          value_type: FLOAT
+          units: mps
+          description: 'Event messages received from agents.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.messages.received_breakdown.event'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+        - uuid: '03d2cba8e1e24648a70e953b0900de80'
+          name: 'Remoted: Control messages per second'
+          type: DEPENDENT
+          key: wazuh.remoted.messages.control.rate
+          delay: '0'
+          value_type: FLOAT
+          units: mps
+          description: 'Control messages (keep-alive, startup, shutdown, request) received from agents.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.messages.received_breakdown.control'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+        - uuid: df66079c784f4503b556c65cabfc3658
+          name: 'Remoted: Discarded messages per second'
+          type: DEPENDENT
+          key: wazuh.remoted.messages.discarded.rate
+          delay: '0'
+          value_type: FLOAT
+          units: mps
+          description: 'Messages from agents discarded by wazuh-remoted.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.messages.received_breakdown.discarded'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+        - uuid: d7811ffa3bce438aa715cee0081a7a5f
+          name: 'Remoted: Receive queue size'
+          type: DEPENDENT
+          key: wazuh.remoted.queue.size
+          delay: '0'
+          description: 'Capacity of the remoted receive queue, in messages.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.queues.received.size'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+        - uuid: b1dff91a1e834ca988881c451b1d57d8
+          name: 'Remoted: Receive queue usage'
+          type: DEPENDENT
+          key: wazuh.remoted.queue.usage
+          delay: '0'
+          description: 'Messages waiting in the remoted receive queue.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.queues.received.usage'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+        - uuid: '4e6165a8ffba4bef8017fa2ddf1c508d'
+          name: 'Remoted: Receive queue utilization'
+          type: DEPENDENT
+          key: wazuh.remoted.queue.util
+          delay: '0'
+          value_type: FLOAT
+          units: '%'
+          description: 'Utilization of the remoted receive queue.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.remoted.queues.received.pct'
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: remoted
+          triggers:
+            - uuid: c36d6897604849cabb49974eb3a0d193
+              expression: 'min(/Wazuh manager by HTTP/wazuh.remoted.queue.util,5m)>{$WAZUH.QUEUE.UTIL.MAX.WARN}'
+              name: 'Wazuh: Remoted receive queue utilization is high'
+              event_name: 'Wazuh: Remoted receive queue utilization is high (over {$WAZUH.QUEUE.UTIL.MAX.WARN}% for 5m)'
+              opdata: 'Utilization: {ITEM.LASTVALUE1}'
+              priority: WARNING
+              description: 'Messages from agents wait in the remoted receive queue. When the queue is full, remoted discards messages.'
+              dependencies:
+                - name: 'Wazuh: Remoted receive queue utilization is critical'
+                  expression: 'min(/Wazuh manager by HTTP/wazuh.remoted.queue.util,5m)>{$WAZUH.QUEUE.UTIL.MAX.CRIT}'
+              tags:
+                - tag: scope
+                  value: performance
+            - uuid: '50ec3f4ba2614ea98de344ddb37f8f43'
+              expression: 'min(/Wazuh manager by HTTP/wazuh.remoted.queue.util,5m)>{$WAZUH.QUEUE.UTIL.MAX.CRIT}'
+              name: 'Wazuh: Remoted receive queue utilization is critical'
+              event_name: 'Wazuh: Remoted receive queue utilization is critical (over {$WAZUH.QUEUE.UTIL.MAX.CRIT}% for 5m)'
+              opdata: 'Utilization: {ITEM.LASTVALUE1}'
+              priority: HIGH
+              description: 'The remoted receive queue is almost full. Remoted discards messages from agents when the queue is full.'
+              tags:
+                - tag: scope
+                  value: performance
+        - uuid: acb1843fb1fb41a6a2533475d5b039ba
+          name: 'Wazuh DB: Queries per second'
+          type: DEPENDENT
+          key: wazuh.db.queries.rate
+          delay: '0'
+          value_type: FLOAT
+          units: qps
+          description: 'Queries received by wazuh-db.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.db.queries.received'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+          master_item:
+            key: wazuh.manager.get
+          tags:
+            - tag: component
+              value: wazuh-db
+      discovery_rules:
+        - uuid: d9ef0af9ddfc4cc4a82e245da736c800
+          name: 'Cluster-wide metrics discovery'
+          type: DEPENDENT
+          key: wazuh.cluster.scope.discovery
+          delay: '0'
+          description: 'Creates the agent summary and update items on the master node or on a standalone manager. Nothing is discovered on a worker node.'
+          item_prototypes:
+            - uuid: '59f563ad112c42d584b19b8cacfe8bda'
+              name: 'Agents: Active'
+              type: DEPENDENT
+              key: 'wazuh.agents.active[{#SINGLETON}]'
+              delay: '0'
+              description: 'Agents connected to the manager.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.agents.active'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: agents
+            - uuid: c2e0e3336ecf4c76b52292371653e0a2
+              name: 'Agents: Disconnected'
+              type: DEPENDENT
+              key: 'wazuh.agents.disconnected[{#SINGLETON}]'
+              delay: '0'
+              description: 'Agents that were connected and lost the connection.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.agents.disconnected'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: agents
+            - uuid: '52361c3d60cd48339e9c35ad07dfc8cb'
+              name: 'Agents: Never connected'
+              type: DEPENDENT
+              key: 'wazuh.agents.never_connected[{#SINGLETON}]'
+              delay: '0'
+              description: 'Registered agents that never connected.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.agents.never_connected'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: agents
+            - uuid: '7c8b0abf0fcf4a8eb0d43623309795ff'
+              name: 'Agents: Pending'
+              type: DEPENDENT
+              key: 'wazuh.agents.pending[{#SINGLETON}]'
+              delay: '0'
+              description: 'Agents waiting for the connection to complete.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.agents.pending'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: agents
+            - uuid: '0e17e43f667f4d04b9b4db7d00a4b056'
+              name: 'Agents: Total'
+              type: DEPENDENT
+              key: 'wazuh.agents.total[{#SINGLETON}]'
+              delay: '0'
+              description: 'Registered agents.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.agents.total'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: agents
+            - uuid: '6174b885a3974e3e995de2463eb2baf3'
+              name: 'Agents: Disconnected, in %'
+              type: DEPENDENT
+              key: 'wazuh.agents.disconnected.pct[{#SINGLETON}]'
+              delay: '0'
+              value_type: FLOAT
+              units: '%'
+              description: 'Share of disconnected agents in all registered agents.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.agents.disconnected_pct'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: agents
+              trigger_prototypes:
+                - uuid: '7a210611954844f28a1314ee8bd1d454'
+                  expression: 'min(/Wazuh manager by HTTP/wazuh.agents.disconnected.pct[{#SINGLETON}],5m)>{$WAZUH.AGENTS.DISCONNECTED.MAX.WARN}'
+                  name: 'Wazuh: Too many disconnected agents'
+                  event_name: 'Wazuh: Too many disconnected agents (over {$WAZUH.AGENTS.DISCONNECTED.MAX.WARN}% for 5m)'
+                  opdata: 'Disconnected: {ITEM.LASTVALUE1}'
+                  priority: WARNING
+                  description: 'The share of disconnected agents is above the threshold.'
+                  tags:
+                    - tag: scope
+                      value: availability
+            - uuid: f729946ca1074474ae807968b72b10bf
+              name: 'Agents: Configuration not synchronized'
+              type: DEPENDENT
+              key: 'wazuh.agents.not_synced[{#SINGLETON}]'
+              delay: '0'
+              description: 'Agents whose group configuration is not synchronized.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.agents.not_synced'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: agents
+            - uuid: '4998829811f34a2493aadcfbf1912ed0'
+              name: 'Cluster: Nodes'
+              type: DEPENDENT
+              key: 'wazuh.cluster.nodes[{#SINGLETON}]'
+              delay: '0'
+              description: 'Nodes reported by the cluster health check. Zero on a standalone manager.'
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var data = JSON.parse(value);
+
+                      return (data.nodes || []).length;
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: cluster
+            - uuid: fe65bcd8938a4391a0a2add0a59e673c
+              name: 'Latest available version'
+              type: DEPENDENT
+              key: 'wazuh.update.latest[{#SINGLETON}]'
+              delay: '0'
+              value_type: CHAR
+              trends: '0'
+              description: 'Newest Wazuh release newer than the installed version, as reported by GET /manager/version/check (major, then minor, then patch). Empty when the installation is up to date or the update check is disabled.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.updates.latest'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - '1d'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: application
+              trigger_prototypes:
+                - uuid: '164134f8a33d4f478feb401a4e4b717e'
+                  expression: 'length(last(/Wazuh manager by HTTP/wazuh.update.latest[{#SINGLETON}]))>0'
+                  name: 'Wazuh: New version is available'
+                  opdata: 'Available: {ITEM.LASTVALUE1}'
+                  priority: INFO
+                  description: 'The Wazuh update check reports a newer release. Read the release notes before upgrading.'
+                  tags:
+                    - tag: scope
+                      value: notice
+          graph_prototypes:
+            - uuid: '1063f526be6a4946ae50afcd920cba70'
+              name: 'Wazuh: Agents by connection status'
+              ymin_type_1: FIXED
+              graph_items:
+                - color: '00C48C'
+                  item:
+                    host: 'Wazuh manager by HTTP'
+                    key: 'wazuh.agents.active[{#SINGLETON}]'
+                - sortorder: '1'
+                  color: E45959
+                  item:
+                    host: 'Wazuh manager by HTTP'
+                    key: 'wazuh.agents.disconnected[{#SINGLETON}]'
+                - sortorder: '2'
+                  color: FFBF59
+                  item:
+                    host: 'Wazuh manager by HTTP'
+                    key: 'wazuh.agents.pending[{#SINGLETON}]'
+                - sortorder: '3'
+                  color: '97AAB3'
+                  item:
+                    host: 'Wazuh manager by HTTP'
+                    key: 'wazuh.agents.never_connected[{#SINGLETON}]'
+          master_item:
+            key: wazuh.manager.get
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value);
+
+                  if (!data.api || data.api.available !== 1) {
+                  	throw 'The Wazuh API is not available.';
+                  }
+
+                  return JSON.stringify((data.cluster && data.cluster.role !== 'worker') ? [{'{#SINGLETON}': ''}] : []);
+              error_handler: DISCARD_VALUE
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+        - uuid: d7b426264252432ca69397ed854ebeef
+          name: 'Cluster nodes discovery'
+          type: DEPENDENT
+          key: wazuh.cluster.node.discovery
+          delay: '0'
+          description: 'Discovers cluster nodes from GET /cluster/healthcheck on the master node.'
+          item_prototypes:
+            - uuid: eb39d6f9172f4e79828917455fa92d96
+              name: 'Node [{#NODE.NAME}]: Active agents'
+              type: DEPENDENT
+              key: 'wazuh.cluster.node.agents[{#NODE.NAME}]'
+              delay: '0'
+              description: 'Agents connected to the node.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.nodes[?(@.name==''{#NODE.NAME}'')].active_agents.first()'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: cluster
+                - tag: node
+                  value: '{#NODE.NAME}'
+            - uuid: '3012265f818e4cf5b5ab10f0d06a8035'
+              name: 'Node [{#NODE.NAME}]: Version'
+              type: DEPENDENT
+              key: 'wazuh.cluster.node.version[{#NODE.NAME}]'
+              delay: '0'
+              value_type: CHAR
+              trends: '0'
+              description: 'Wazuh version of the node.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.nodes[?(@.name==''{#NODE.NAME}'')].version.first()'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - '1d'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: cluster
+                - tag: node
+                  value: '{#NODE.NAME}'
+            - uuid: e22d772ac07d4846a6e4001a7c0b2952
+              name: 'Node [{#NODE.NAME}]: Time since last keep-alive'
+              type: DEPENDENT
+              key: 'wazuh.cluster.node.keepalive.age[{#NODE.NAME}]'
+              delay: '0'
+              units: s
+              description: 'Time since the master received the last keep-alive from the worker node. Calculated with the clock of the Zabbix server or proxy.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.nodes[?(@.name==''{#NODE.NAME}'')].keepalive_age.first()'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: cluster
+                - tag: node
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: '30d61c02fbda4edba981623d82c4a31b'
+                  expression: 'min(/Wazuh manager by HTTP/wazuh.cluster.node.keepalive.age[{#NODE.NAME}],5m)>{$WAZUH.CLUSTER.KEEPALIVE.MAX.WARN}'
+                  name: 'Wazuh: Cluster node [{#NODE.NAME}]: No keep-alive from the worker'
+                  event_name: 'Wazuh: Cluster node [{#NODE.NAME}]: No keep-alive from the worker (over {$WAZUH.CLUSTER.KEEPALIVE.MAX.WARN})'
+                  opdata: 'Last keep-alive: {ITEM.LASTVALUE1} ago'
+                  priority: AVERAGE
+                  description: 'The master has not received a keep-alive from the worker node. Check wazuh-clusterd on the worker and the network on port 1516/TCP.'
+                  tags:
+                    - tag: scope
+                      value: availability
+                - uuid: '228f93cc777d41ebba07fbabeed00b48'
+                  expression: 'nodata(/Wazuh manager by HTTP/wazuh.cluster.node.keepalive.age[{#NODE.NAME}],10m)=1'
+                  name: 'Wazuh: Cluster node [{#NODE.NAME}]: Node is not reported by the master'
+                  priority: AVERAGE
+                  description: 'The worker node is missing from GET /cluster/healthcheck for 10 minutes. The node is disconnected from the cluster or was removed.'
+                  dependencies:
+                    - name: 'Wazuh: API is not available'
+                      expression: 'max(/Wazuh manager by HTTP/wazuh.api.available,3m)=0'
+                  tags:
+                    - tag: scope
+                      value: availability
+            - uuid: '6621ad9d249c4a1c8020477460bb5726'
+              name: 'Node [{#NODE.NAME}]: Ruleset synchronized'
+              type: DEPENDENT
+              key: 'wazuh.cluster.node.ruleset.synced[{#NODE.NAME}]'
+              delay: '0'
+              description: 'Whether the node ruleset matches the master (GET /cluster/ruleset/synchronization).'
+              valuemap:
+                name: 'Wazuh boolean'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.nodes[?(@.name==''{#NODE.NAME}'')].ruleset_synced.first()'
+                  error_handler: DISCARD_VALUE
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: cluster
+                - tag: node
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: '06c090eda82243fb9f1e5e63b2b7560b'
+                  expression: 'max(/Wazuh manager by HTTP/wazuh.cluster.node.ruleset.synced[{#NODE.NAME}],15m)=0'
+                  name: 'Wazuh: Cluster node [{#NODE.NAME}]: Ruleset is not synchronized'
+                  priority: WARNING
+                  description: 'The node ruleset differs from the master for 15 minutes. The node may evaluate events with outdated rules or decoders.'
+                  tags:
+                    - tag: scope
+                      value: notice
+          trigger_prototypes:
+            - uuid: '04e7d770884b4d88a4b9271dfd3ac0b4'
+              expression: 'last(/Wazuh manager by HTTP/wazuh.cluster.node.version[{#NODE.NAME}])<>last(/Wazuh manager by HTTP/wazuh.manager.version)'
+              name: 'Wazuh: Cluster node [{#NODE.NAME}]: Version differs from the master'
+              opdata: 'Node: {ITEM.LASTVALUE1}, master: {ITEM.LASTVALUE2}'
+              priority: WARNING
+              description: 'All cluster nodes must run the same Wazuh version.'
+              tags:
+                - tag: scope
+                  value: notice
+          master_item:
+            key: wazuh.manager.get
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value);
+
+                  if (!data.api || data.api.available !== 1) {
+                  	throw 'The Wazuh API is not available.';
+                  }
+
+                  if (!Array.isArray(data.nodes)) {
+                  	throw 'No cluster node data.';
+                  }
+
+                  return JSON.stringify(data.nodes.map(function (node) {
+                  	return {'{#NODE.NAME}': node.name, '{#NODE.TYPE}': node.type};
+                  }));
+              error_handler: DISCARD_VALUE
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          overrides:
+            - name: 'Master node'
+              step: '1'
+              filter:
+                conditions:
+                  - macro: '{#NODE.TYPE}'
+                    value: '^master$'
+                    formulaid: A
+              operations:
+                - operationobject: ITEM_PROTOTYPE
+                  operator: LIKE
+                  value: keep-alive
+                  discover: NO_DISCOVER
+                - operationobject: TRIGGER_PROTOTYPE
+                  operator: LIKE
+                  value: keep-alive
+                  discover: NO_DISCOVER
+                - operationobject: TRIGGER_PROTOTYPE
+                  operator: LIKE
+                  value: 'not reported'
+                  discover: NO_DISCOVER
+        - uuid: d1f9a87947b644259c5565d3316b8d9b
+          name: 'Analysisd queues discovery'
+          type: DEPENDENT
+          key: wazuh.analysisd.queue.discovery
+          delay: '0'
+          description: 'Discovers the input and output queues of wazuh-analysisd.'
+          item_prototypes:
+            - uuid: '515212c3740c4837bdaf64bbda1ef35d'
+              name: 'Analysisd: Queue [{#QUEUE}] utilization'
+              type: DEPENDENT
+              key: 'wazuh.analysisd.queue.util[{#QUEUE}]'
+              delay: '0'
+              value_type: FLOAT
+              units: '%'
+              description: 'Utilization of the analysisd queue. A full input queue makes analysisd drop events.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.analysisd.queues[''{#QUEUE}''].pct'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: analysisd
+                - tag: queue
+                  value: '{#QUEUE}'
+              trigger_prototypes:
+                - uuid: f7605ceb03ef46f68f54ae73f9f9a07c
+                  expression: 'min(/Wazuh manager by HTTP/wazuh.analysisd.queue.util[{#QUEUE}],5m)>{$WAZUH.QUEUE.UTIL.MAX.WARN}'
+                  name: 'Wazuh: Analysisd queue [{#QUEUE}] utilization is high'
+                  event_name: 'Wazuh: Analysisd queue [{#QUEUE}] utilization is high (over {$WAZUH.QUEUE.UTIL.MAX.WARN}% for 5m)'
+                  opdata: 'Utilization: {ITEM.LASTVALUE1}'
+                  priority: WARNING
+                  description: 'Events wait in the analysisd queue. A full input queue makes analysisd drop events.'
+                  dependencies:
+                    - name: 'Wazuh: Analysisd queue [{#QUEUE}] utilization is critical'
+                      expression: 'min(/Wazuh manager by HTTP/wazuh.analysisd.queue.util[{#QUEUE}],5m)>{$WAZUH.QUEUE.UTIL.MAX.CRIT}'
+                  tags:
+                    - tag: scope
+                      value: performance
+                - uuid: af7aa407d53b4cb9af3e90e689a67bd4
+                  expression: 'min(/Wazuh manager by HTTP/wazuh.analysisd.queue.util[{#QUEUE}],5m)>{$WAZUH.QUEUE.UTIL.MAX.CRIT}'
+                  name: 'Wazuh: Analysisd queue [{#QUEUE}] utilization is critical'
+                  event_name: 'Wazuh: Analysisd queue [{#QUEUE}] utilization is critical (over {$WAZUH.QUEUE.UTIL.MAX.CRIT}% for 5m)'
+                  opdata: 'Utilization: {ITEM.LASTVALUE1}'
+                  priority: HIGH
+                  description: 'The analysisd queue is almost full.'
+                  tags:
+                    - tag: scope
+                      value: performance
+            - uuid: '6b4fca8647be40b6a231302c928f330c'
+              name: 'Analysisd: Queue [{#QUEUE}] size'
+              type: DEPENDENT
+              key: 'wazuh.analysisd.queue.size[{#QUEUE}]'
+              delay: '0'
+              description: 'Capacity of the analysisd queue, in events.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.analysisd.queues[''{#QUEUE}''].size'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - '1d'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: analysisd
+                - tag: queue
+                  value: '{#QUEUE}'
+          master_item:
+            key: wazuh.manager.get
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value);
+
+                  if (!data.api || data.api.available !== 1) {
+                  	throw 'The Wazuh API is not available.';
+                  }
+
+                  if (!data.analysisd || !data.analysisd.queues) {
+                  	throw 'No analysisd queue data.';
+                  }
+
+                  return JSON.stringify(Object.keys(data.analysisd.queues).map(function (name) {
+                  	return {'{#QUEUE}': name};
+                  }));
+              error_handler: DISCARD_VALUE
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+        - uuid: ba2bc8189e5340829b580c2a7d2a9cd0
+          name: 'Daemons discovery'
+          type: DEPENDENT
+          key: wazuh.daemon.discovery
+          delay: '0'
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#DAEMON}'
+                value: '{$WAZUH.LLD.FILTER.DAEMON.MATCHES}'
+                formulaid: A
+              - macro: '{#DAEMON}'
+                value: '{$WAZUH.LLD.FILTER.DAEMON.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+                formulaid: B
+          description: 'Discovers Wazuh daemons from GET /manager/status. wazuh-clusterd is skipped when the cluster is disabled.'
+          item_prototypes:
+            - uuid: '37eff3f7e7eb44f9baccf287ddcd6e24'
+              name: 'Daemon [{#DAEMON}]: State'
+              type: DEPENDENT
+              key: 'wazuh.daemon.state[{#DAEMON}]'
+              delay: '0'
+              description: 'State of the daemon reported by GET /manager/status.'
+              valuemap:
+                name: 'Wazuh daemon state'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.daemons[''{#DAEMON}'']'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - '1h'
+              master_item:
+                key: wazuh.manager.get
+              tags:
+                - tag: component
+                  value: daemon
+                - tag: daemon
+                  value: '{#DAEMON}'
+              trigger_prototypes:
+                - uuid: fd2d0708fe1c4983ba62a687d5b4d7d2
+                  expression: 'last(/Wazuh manager by HTTP/wazuh.daemon.state[{#DAEMON}])<>1'
+                  name: 'Wazuh: Daemon [{#DAEMON}] is not running'
+                  opdata: 'State: {ITEM.LASTVALUE1}'
+                  priority: AVERAGE
+                  description: 'The daemon is not running. Daemons that are optional by configuration are matched by {$WAZUH.DAEMON.OPTIONAL.MATCHES} and have no trigger.'
+                  dependencies:
+                    - name: 'Wazuh: API is not available'
+                      expression: 'max(/Wazuh manager by HTTP/wazuh.api.available,3m)=0'
+                  tags:
+                    - tag: scope
+                      value: availability
+          master_item:
+            key: wazuh.manager.get
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value);
+
+                  if (!data.api || data.api.available !== 1) {
+                  	throw 'The Wazuh API is not available.';
+                  }
+
+                  if (!data.daemons) {
+                  	throw 'No daemon data.';
+                  }
+
+                  return JSON.stringify(Object.keys(data.daemons).filter(function (name) {
+                  	return !(name === 'wazuh-clusterd' && data.cluster && data.cluster.enabled === 0);
+                  }).map(function (name) {
+                  	return {'{#DAEMON}': name};
+                  }));
+              error_handler: DISCARD_VALUE
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          overrides:
+            - name: 'Optional daemons'
+              step: '1'
+              filter:
+                conditions:
+                  - macro: '{#DAEMON}'
+                    value: '{$WAZUH.DAEMON.OPTIONAL.MATCHES}'
+                    formulaid: A
+              operations:
+                - operationobject: TRIGGER_PROTOTYPE
+                  operator: LIKE
+                  value: 'is not running'
+                  discover: NO_DISCOVER
+      tags:
+        - tag: class
+          value: software
+        - tag: target
+          value: wazuh
+      macros:
+        - macro: '{$HTTP.TLS.VERIFY}'
+          value: none
+          description: 'TLS certificate verification for the script item: "none" - disabled, "peer" - verify the certificate chain and expiration, "full" - full verification. Any other value enables full verification. To override the setting for this template only, define the macro with the context "Wazuh", e.g. {$HTTP.TLS.VERIFY:"Wazuh"}. Requires a Zabbix server or proxy version that supports TLS options in the HttpRequest constructor.'
+        - macro: '{$WAZUH.AGENTS.DISCONNECTED.MAX.WARN}'
+          value: '10'
+          description: 'Maximum share of disconnected agents, in %, for the trigger expression.'
+        - macro: '{$WAZUH.API.HOST}'
+          value: '<SET WAZUH API HOST>'
+          description: 'Hostname or IP address of the Wazuh server node.'
+        - macro: '{$WAZUH.API.PASSWORD}'
+          type: SECRET_TEXT
+          description: 'Password of the Wazuh server API user.'
+        - macro: '{$WAZUH.API.PORT}'
+          value: '55000'
+          description: 'Wazuh server API port.'
+        - macro: '{$WAZUH.API.SCHEME}'
+          value: https
+          description: 'Wazuh server API scheme (http or https).'
+        - macro: '{$WAZUH.API.USER}'
+          value: zbx_monitor
+          description: 'Wazuh server API user with read-only RBAC permissions.'
+        - macro: '{$WAZUH.CLUSTER.KEEPALIVE.MAX.WARN}'
+          value: '5m'
+          description: 'Maximum age of the last keep-alive received by the master from a worker node.'
+        - macro: '{$WAZUH.DAEMON.OPTIONAL.MATCHES}'
+          value: '^wazuh-(agentlessd|csyslogd|dbd|integratord|maild|reportd)$'
+          description: 'Daemons that run only when enabled in ossec.conf. No "is not running" trigger is created for them. Remove a daemon from the list if your configuration requires it.'
+        - macro: '{$WAZUH.DATA.INTERVAL}'
+          value: '1m'
+          description: 'Update interval of the API data item.'
+        - macro: '{$WAZUH.HTTP_PROXY}'
+          value: ''
+          description: 'HTTP proxy for API requests, for example http://proxy.example.com:3128. Leave empty to connect directly.'
+        - macro: '{$WAZUH.LLD.FILTER.DAEMON.MATCHES}'
+          value: '.*'
+          description: 'Filter of discoverable Wazuh daemons by name.'
+        - macro: '{$WAZUH.LLD.FILTER.DAEMON.NOT_MATCHES}'
+          value: CHANGE_IF_NEEDED
+          description: 'Filter to exclude discovered Wazuh daemons by name.'
+        - macro: '{$WAZUH.QUEUE.UTIL.MAX.CRIT}'
+          value: '95'
+          description: 'Critical threshold of analysisd and remoted queue utilization, in %.'
+        - macro: '{$WAZUH.QUEUE.UTIL.MAX.WARN}'
+          value: '80'
+          description: 'Warning threshold of analysisd and remoted queue utilization, in %.'
+      dashboards:
+        - uuid: '22b6fd0003da4b4588e4d2ba6896b6e7'
+          name: 'Wazuh manager'
+          pages:
+            - name: Overview
+              widgets:
+                - type: graph
+                  width: '36'
+                  height: '5'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh manager by HTTP'
+                        name: 'Wazuh: Analysisd events'
+                    - type: STRING
+                      name: reference
+                      value: AAAAA
+                - type: graph
+                  x: '36'
+                  width: '36'
+                  height: '5'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh manager by HTTP'
+                        name: 'Wazuh: Analysisd output'
+                    - type: STRING
+                      name: reference
+                      value: AAAAB
+                - type: graph
+                  'y': '5'
+                  width: '36'
+                  height: '5'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh manager by HTTP'
+                        name: 'Wazuh: Remoted messages'
+                    - type: STRING
+                      name: reference
+                      value: AAAAC
+                - type: graph
+                  x: '36'
+                  'y': '5'
+                  width: '36'
+                  height: '5'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh manager by HTTP'
+                        name: 'Wazuh: Remoted traffic'
+                    - type: STRING
+                      name: reference
+                      value: AAAAD
+                - type: graphprototype
+                  'y': '10'
+                  width: '72'
+                  height: '5'
+                  fields:
+                    - type: GRAPH_PROTOTYPE
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh manager by HTTP'
+                        name: 'Wazuh: Agents by connection status'
+                    - type: INTEGER
+                      name: columns
+                      value: '1'
+                    - type: INTEGER
+                      name: rows
+                      value: '1'
+                    - type: STRING
+                      name: reference
+                      value: AAAAE
+      valuemaps:
+        - uuid: ef6a97c58d9d4b4c84fd526bbbad91e9
+          name: 'Service state'
+          mappings:
+            - value: '0'
+              newvalue: Down
+            - value: '1'
+              newvalue: Up
+        - uuid: '279d1515ad6b496b83913936e50ce081'
+          name: 'Wazuh daemon state'
+          mappings:
+            - value: '0'
+              newvalue: Stopped
+            - value: '1'
+              newvalue: Running
+            - value: '2'
+              newvalue: Other
+        - uuid: '83dda483fd884cecbf119303b510bb97'
+          name: 'Wazuh boolean'
+          mappings:
+            - value: '0'
+              newvalue: 'No'
+            - value: '1'
+              newvalue: 'Yes'
+        - uuid: '37a1271b7f1e4ee0af33a528b9d8c8a4'
+          name: 'Wazuh configuration status'
+          mappings:
+            - value: '0'
+              newvalue: Invalid
+            - value: '1'
+              newvalue: Valid
+  triggers:
+    - uuid: b2f6ef130a884f61bcff9487716953e8
+      expression: 'last(/Wazuh manager by HTTP/wazuh.cluster.enabled)=1 and last(/Wazuh manager by HTTP/wazuh.cluster.running)=0'
+      name: 'Wazuh: Cluster is enabled but not running'
+      priority: HIGH
+      description: 'The cluster is enabled in ossec.conf but wazuh-clusterd is not running. The node does not synchronize with the cluster.'
+      tags:
+        - tag: scope
+          value: availability
+  graphs:
+    - uuid: '7fe092eebc2e4ea5bc21e157fe079fc5'
+      name: 'Wazuh: Analysisd events'
+      ymin_type_1: FIXED
+      graph_items:
+        - color: '7499FF'
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.analysisd.events.received.rate
+        - sortorder: '1'
+          color: '00C48C'
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.analysisd.events.processed.rate
+        - sortorder: '2'
+          color: E45959
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.analysisd.events.dropped.rate
+    - uuid: '3c786403adc84269b64efcf9e6b1c9a9'
+      name: 'Wazuh: Analysisd output'
+      ymin_type_1: FIXED
+      graph_items:
+        - color: FFA059
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.analysisd.alerts.written.rate
+        - sortorder: '1'
+          color: '97AAB3'
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.analysisd.archives.written.rate
+        - sortorder: '2'
+          color: '7499FF'
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.analysisd.firewall.written.rate
+    - uuid: '67095c401a364fa78516797f1abac22a'
+      name: 'Wazuh: Remoted messages'
+      ymin_type_1: FIXED
+      graph_items:
+        - color: '7499FF'
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.remoted.messages.event.rate
+        - sortorder: '1'
+          color: '00C48C'
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.remoted.messages.control.rate
+        - sortorder: '2'
+          color: E45959
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.remoted.messages.discarded.rate
+    - uuid: '7cc7d52b574842109f9158bcb0ceca21'
+      name: 'Wazuh: Remoted traffic'
+      ymin_type_1: FIXED
+      graph_items:
+        - color: '7499FF'
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.remoted.bytes.received.rate
+        - sortorder: '1'
+          color: '00C48C'
+          item:
+            host: 'Wazuh manager by HTTP'
+            key: wazuh.remoted.bytes.sent.rate
