@@ -115,6 +115,8 @@ setfacl -d -x u:zabbix /var/ossec /var/ossec/var/run
 
 Wazuh generates self-signed certificates by default, so the templates do not verify certificates. For the manager template set `{$HTTP.TLS.VERIFY}` to `full` when the Zabbix server or proxy trusts the API certificate.
 
+The indexer and dashboard HTTP agent items send the monitoring user with Basic authentication and do not set *SSL verify peer* and *SSL verify host*. These fields do not accept macros. To verify the certificates, add the Wazuh root CA (`root-ca.pem`) to the trust store of the Zabbix server or proxy and enable both options on the template items after import.
+
 ## Building
 
 The YAML files and the template READMEs are generated from the TypeScript sources in [tools/](tools/):

@@ -153,8 +153,13 @@ if (!data.status || !Array.isArray(data.status.statuses)) {
 }
 
 // Status IDs carry the version ("plugin:name@2.19.6"); strip it so that items survive upgrades.
+// The ID is placed into the item prototype script, so only IDs made of safe characters are discovered.
 return JSON.stringify(data.status.statuses.map(function (status) {
-	return {'{#PLUGIN}': status.id.replace(/@[^@]*$/, '')};
+	return String(status.id).replace(/@[^@]*$/, '');
+}).filter(function (id) {
+	return /^[A-Za-z0-9:_.-]+$/.test(id);
+}).map(function (id) {
+	return {'{#PLUGIN}': id};
 }));`, ["DISCARD_VALUE"]),
         heartbeat("1h"),
       ],
