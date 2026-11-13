@@ -1,0 +1,1304 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: a571c0d144b14fd4a87a9d9b2aa9fcd6
+      name: 'Templates/Applications'
+  templates:
+    - uuid: '1b28bd8ccc6e4ddaba1b6e0033894960'
+      template: 'Wazuh indexer by HTTP'
+      name: 'Wazuh indexer by HTTP'
+      description: |
+        Monitors the Wazuh indexer (OpenSearch) cluster through its REST API: cluster health, shard allocation and limits, disk watermarks, per-node JVM heap, disk, CPU, file descriptors, thread pool rejections, circuit breakers, and the ingest of Wazuh alerts.
+
+        Setup:
+
+        1. Create an indexer user for monitoring. It needs the cluster permission cluster_monitor and the index permission indices:data/read/search on the alerts index pattern (wazuh-alerts-* by default). The README in the repository root has an example role.
+        2. Link the template to a host and set {$WAZUH.INDEXER.HOST} to one indexer node, or to a load balancer in front of the cluster. All cluster data is collected through this node, so link the template to one host per cluster.
+        3. Set {$WAZUH.INDEXER.USER} and {$WAZUH.INDEXER.PASSWORD}.
+
+        The Wazuh indexer uses https on port 9200 by default. Certificates are not verified: the HTTP agent items do not set "verify_peer" and "verify_host".
+
+        Tested with Wazuh indexer 4.14 (OpenSearch 2.19) and Zabbix 7.0.
+
+        Created by Adam "tick" Pielak, https://wazuh.blog
+      vendor:
+        name: 'Adam "tick" Pielak'
+        version: '7.0-1'
+      groups:
+        - name: 'Templates/Applications'
+      items:
+        - uuid: cf1e03932847480fa563bdf3a8914a20
+          name: 'Service status'
+          type: SIMPLE
+          key: 'net.tcp.service["{$WAZUH.INDEXER.SCHEME}","{$WAZUH.INDEXER.HOST}","{$WAZUH.INDEXER.PORT}"]'
+          description: 'Checks if the indexer port is accepting TCP connections.'
+          valuemap:
+            name: 'Service state'
+          preprocessing:
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '10m'
+          tags:
+            - tag: component
+              value: health
+            - tag: component
+              value: network
+          triggers:
+            - uuid: '18b7d08b54bd4566ac781efa50c21888'
+              expression: 'last(/Wazuh indexer by HTTP/net.tcp.service["{$WAZUH.INDEXER.SCHEME}","{$WAZUH.INDEXER.HOST}","{$WAZUH.INDEXER.PORT}"])=0'
+              name: 'Wazuh indexer: Service is down'
+              priority: AVERAGE
+              description: 'The indexer port is not accepting TCP connections.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: aef3e14b5752460f8817b6688e587232
+          name: 'Service response time'
+          type: SIMPLE
+          key: 'net.tcp.service.perf["{$WAZUH.INDEXER.SCHEME}","{$WAZUH.INDEXER.HOST}","{$WAZUH.INDEXER.PORT}"]'
+          value_type: FLOAT
+          units: s
+          description: 'Checks the performance of the TCP service.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: '9c6f3bac5caf44b7996f63b6bb6d1d91'
+              expression: 'min(/Wazuh indexer by HTTP/net.tcp.service.perf["{$WAZUH.INDEXER.SCHEME}","{$WAZUH.INDEXER.HOST}","{$WAZUH.INDEXER.PORT}"],5m)>{$WAZUH.INDEXER.RESPONSE_TIME.MAX.WARN}'
+              name: 'Wazuh indexer: Service response time is too high'
+              event_name: 'Wazuh indexer: Service response time is too high (over {$WAZUH.INDEXER.RESPONSE_TIME.MAX.WARN} for 5m)'
+              priority: WARNING
+              description: 'The TCP service of the indexer responds slowly.'
+              manual_close: 'YES'
+              dependencies:
+                - name: 'Wazuh indexer: Service is down'
+                  expression: 'last(/Wazuh indexer by HTTP/net.tcp.service["{$WAZUH.INDEXER.SCHEME}","{$WAZUH.INDEXER.HOST}","{$WAZUH.INDEXER.PORT}"])=0'
+              tags:
+                - tag: scope
+                  value: performance
+        - uuid: fba7b72a2958444faf4693eedf541de4
+          name: 'Get cluster health'
+          type: HTTP_AGENT
+          key: wazuh.indexer.cluster.get_health
+          delay: '1m'
+          history: '0'
+          value_type: TEXT
+          trends: '0'
+          authtype: BASIC
+          username: '{$WAZUH.INDEXER.USER}'
+          password: '{$WAZUH.INDEXER.PASSWORD}'
+          timeout: '15s'
+          url: '{$WAZUH.INDEXER.SCHEME}://{$WAZUH.INDEXER.HOST}:{$WAZUH.INDEXER.PORT}/_cluster/health?timeout=5s'
+          description: 'Returns the health of the cluster.'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: b638b79f6f83479385a470a891c3203d
+          name: 'Get cluster settings'
+          type: HTTP_AGENT
+          key: wazuh.indexer.cluster.get_settings
+          delay: '1h'
+          history: '0'
+          value_type: TEXT
+          trends: '0'
+          authtype: BASIC
+          username: '{$WAZUH.INDEXER.USER}'
+          password: '{$WAZUH.INDEXER.PASSWORD}'
+          timeout: '15s'
+          url: '{$WAZUH.INDEXER.SCHEME}://{$WAZUH.INDEXER.HOST}:{$WAZUH.INDEXER.PORT}/_cluster/settings?include_defaults=true&filter_path=*.cluster.max_shards_per_node,*.cluster.routing.allocation.disk.watermark'
+          description: 'Returns the shard limit and the disk watermarks (transient, persistent and default values).'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: '43b4e50379c44d85895b8262905045dc'
+          name: 'Get nodes stats'
+          type: HTTP_AGENT
+          key: wazuh.indexer.nodes.get_stats
+          delay: '1m'
+          history: '0'
+          value_type: TEXT
+          trends: '0'
+          authtype: BASIC
+          username: '{$WAZUH.INDEXER.USER}'
+          password: '{$WAZUH.INDEXER.PASSWORD}'
+          timeout: '30s'
+          url: '{$WAZUH.INDEXER.SCHEME}://{$WAZUH.INDEXER.HOST}:{$WAZUH.INDEXER.PORT}/_nodes/stats/jvm,fs,os,process,thread_pool,breaker?filter_path=nodes.*.name,nodes.*.roles,nodes.*.jvm.mem.heap_used_percent,nodes.*.jvm.uptime_in_millis,nodes.*.fs.total,nodes.*.os.cpu.percent,nodes.*.process.open_file_descriptors,nodes.*.process.max_file_descriptors,nodes.*.thread_pool.write.rejected,nodes.*.thread_pool.search.rejected,nodes.*.breakers.parent.tripped'
+          description: 'Returns statistics of all cluster nodes.'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: '6b3b6d7e29ca4b2a8b3bc6b2a0997e85'
+          name: 'Get nodes info'
+          type: HTTP_AGENT
+          key: wazuh.indexer.nodes.get_info
+          delay: '1h'
+          history: '0'
+          value_type: TEXT
+          trends: '0'
+          authtype: BASIC
+          username: '{$WAZUH.INDEXER.USER}'
+          password: '{$WAZUH.INDEXER.PASSWORD}'
+          timeout: '15s'
+          url: '{$WAZUH.INDEXER.SCHEME}://{$WAZUH.INDEXER.HOST}:{$WAZUH.INDEXER.PORT}/_nodes?filter_path=nodes.*.name,nodes.*.version'
+          description: 'Returns the name and version of all cluster nodes.'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: '5cd6220053904a1396edc369187b1c81'
+          name: 'Get alerts ingest'
+          type: HTTP_AGENT
+          key: wazuh.indexer.alerts.get
+          delay: '5m'
+          history: '0'
+          value_type: TEXT
+          trends: '0'
+          authtype: BASIC
+          username: '{$WAZUH.INDEXER.USER}'
+          password: '{$WAZUH.INDEXER.PASSWORD}'
+          timeout: '15s'
+          url: '{$WAZUH.INDEXER.SCHEME}://{$WAZUH.INDEXER.HOST}:{$WAZUH.INDEXER.PORT}/{$WAZUH.INDEXER.ALERTS.INDEX}/_search?size=0&filter_path=hits.total,aggregations'
+          request_method: POST
+          post_type: JSON
+          posts: '{"track_total_hits":true,"query":{"range":{"timestamp":{"gte":"now-{$WAZUH.INDEXER.ALERTS.WINDOW}"}}},"aggs":{"last":{"max":{"field":"timestamp"}}}}'
+          description: 'Counts the alerts indexed in the last {$WAZUH.INDEXER.ALERTS.WINDOW} and returns the newest alert timestamp.'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: '5bd4f69763a044c09268fc925693c7a9'
+          name: 'Cluster health status'
+          type: DEPENDENT
+          key: wazuh.indexer.cluster.status
+          delay: '0'
+          description: 'Health of the cluster: green - all shards are assigned, yellow - all primary shards are assigned but one or more replicas are not, red - one or more primary shards are not assigned.'
+          valuemap:
+            name: 'Wazuh indexer cluster state'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.status'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var state = ['green', 'yellow', 'red'];
+
+                  return state.indexOf(value.trim()) === -1 ? 255 : state.indexOf(value.trim());
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: a5aee9c91fdb4015b9a1d60fbce43ede
+              expression: 'last(/Wazuh indexer by HTTP/wazuh.indexer.cluster.status)=2'
+              name: 'Wazuh indexer: Health is RED'
+              priority: HIGH
+              description: 'One or more primary shards are unassigned. Some data is unavailable and new alerts for the affected indices are not indexed.'
+              tags:
+                - tag: scope
+                  value: availability
+            - uuid: a5dba0c1139a45148a09738aa456a259
+              expression: 'last(/Wazuh indexer by HTTP/wazuh.indexer.cluster.status)=1'
+              name: 'Wazuh indexer: Health is YELLOW'
+              priority: AVERAGE
+              description: 'All primary shards are assigned, but one or more replica shards are not. If a node fails, some data can be unavailable until the node is repaired.'
+              tags:
+                - tag: scope
+                  value: availability
+            - uuid: d8fd5374e502471da0538f8b4e173db8
+              expression: 'last(/Wazuh indexer by HTTP/wazuh.indexer.cluster.status)=255'
+              name: 'Wazuh indexer: Health is UNKNOWN'
+              priority: HIGH
+              description: 'The health of the cluster is unknown or cannot be read.'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: fb03f288ab2f475a9e8a7b5ab44c22b7
+          name: 'Cluster name'
+          type: DEPENDENT
+          key: wazuh.indexer.cluster.name
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'Name of the cluster.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.cluster_name'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: health
+        - uuid: baca87da35bb46e2a11315dd8d5acf49
+          name: 'Number of nodes'
+          type: DEPENDENT
+          key: wazuh.indexer.nodes.number
+          delay: '0'
+          description: 'Nodes in the cluster.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.number_of_nodes'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: eceb7d7a35964143990819197bde9b4d
+              expression: 'change(/Wazuh indexer by HTTP/wazuh.indexer.nodes.number)<0'
+              name: 'Wazuh indexer: Number of nodes has decreased'
+              priority: WARNING
+              description: 'One or more nodes left the cluster.'
+              manual_close: 'YES'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '3cd9d29b08fe4e85a5d20a39f493983c'
+          name: 'Number of data nodes'
+          type: DEPENDENT
+          key: wazuh.indexer.nodes.data
+          delay: '0'
+          description: 'Data nodes in the cluster.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.number_of_data_nodes'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: health
+        - uuid: '9f08f37aeb5049ee8c9c1ee0d3766f39'
+          name: 'Active primary shards'
+          type: DEPENDENT
+          key: wazuh.indexer.shards.primary
+          delay: '0'
+          description: 'Active primary shards.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.active_primary_shards'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: shards
+        - uuid: da64da726cef40ba958ef301e9bbe705
+          name: 'Active shards'
+          type: DEPENDENT
+          key: wazuh.indexer.shards.active
+          delay: '0'
+          description: 'Active primary and replica shards.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.active_shards'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: shards
+        - uuid: '875fa2b8fc0c4f668f8dfe134c87f047'
+          name: 'Relocating shards'
+          type: DEPENDENT
+          key: wazuh.indexer.shards.relocating
+          delay: '0'
+          description: 'Shards that are moving to another node.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.relocating_shards'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: shards
+        - uuid: '2638661dcc4a4ce5b25c9d386743823a'
+          name: 'Initializing shards'
+          type: DEPENDENT
+          key: wazuh.indexer.shards.initializing
+          delay: '0'
+          description: 'Shards that are being initialized.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.initializing_shards'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: shards
+        - uuid: c63075122c614cd0ab69da8fe4f6e57f
+          name: 'Unassigned shards'
+          type: DEPENDENT
+          key: wazuh.indexer.shards.unassigned
+          delay: '0'
+          description: 'Shards that are not allocated to a node.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.unassigned_shards'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: shards
+        - uuid: c208b50ff0d547e9bfe2d39e31df5734
+          name: 'Delayed unassigned shards'
+          type: DEPENDENT
+          key: wazuh.indexer.shards.delayed_unassigned
+          delay: '0'
+          description: 'Shards whose allocation is delayed by the timeout settings.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.delayed_unassigned_shards'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: shards
+        - uuid: f87088c38c574bcaa43f2144f66dcdc5
+          name: 'Active shards, in %'
+          type: DEPENDENT
+          key: wazuh.indexer.shards.active.pct
+          delay: '0'
+          value_type: FLOAT
+          units: '%'
+          description: 'Ratio of active shards to all shards.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.active_shards_percent_as_number'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: shards
+        - uuid: '5dc75a4b899d4d28b86f00155e0e00be'
+          name: 'Pending tasks'
+          type: DEPENDENT
+          key: wazuh.indexer.cluster.pending_tasks
+          delay: '0'
+          description: 'Cluster-level changes that are not yet executed.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.number_of_pending_tasks'
+          master_item:
+            key: wazuh.indexer.cluster.get_health
+          tags:
+            - tag: component
+              value: health
+        - uuid: b4e28aa67a90443eafaecd6eca821925
+          name: 'Max shards per node'
+          type: DEPENDENT
+          key: wazuh.indexer.max_shards_per_node
+          delay: '0'
+          description: 'Effective value of cluster.max_shards_per_node.'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value),
+                  	value = null;
+
+                  ['transient', 'persistent', 'defaults'].some(function (scope) {
+                  	var node = data[scope];
+
+                  	'cluster.max_shards_per_node'.split('.').forEach(function (key) {
+                  		node = (node !== undefined && node !== null) ? node[key] : undefined;
+                  	});
+                  	if (node !== undefined && node !== null) {
+                  		value = String(node);
+
+                  		return true;
+                  	}
+
+                  	return false;
+                  });
+
+                  if (value === null) {
+                  	throw 'Setting cluster.max_shards_per_node is not set.';
+                  }
+
+                  return parseInt(value, 10);
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.indexer.cluster.get_settings
+          tags:
+            - tag: component
+              value: shards
+        - uuid: '0d91e00b951f473fbcf0748614f8644e'
+          name: 'Disk watermark low'
+          type: DEPENDENT
+          key: wazuh.indexer.watermark.low
+          delay: '0'
+          value_type: FLOAT
+          units: '%'
+          description: 'Effective value of cluster.routing.allocation.disk.watermark.low, in % of used disk space. -1 when the watermark is an absolute value. Above the low watermark OpenSearch stops allocating new shards to the node.'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value),
+                  	value = null;
+
+                  ['transient', 'persistent', 'defaults'].some(function (scope) {
+                  	var node = data[scope];
+
+                  	'cluster.routing.allocation.disk.watermark.low'.split('.').forEach(function (key) {
+                  		node = (node !== undefined && node !== null) ? node[key] : undefined;
+                  	});
+                  	if (node !== undefined && node !== null) {
+                  		value = String(node);
+
+                  		return true;
+                  	}
+
+                  	return false;
+                  });
+
+                  if (value === null) {
+                  	throw 'Setting cluster.routing.allocation.disk.watermark.low is not set.';
+                  }
+
+                  // A watermark is a percentage ("85%"), a ratio ("0.85") or an absolute free space ("10gb").
+                  // Absolute values are returned as -1: the disk triggers use only relative watermarks.
+                  if (/^\d+(\.\d+)?%$/.test(value)) {
+                  	return parseFloat(value);
+                  }
+                  if (/^0?\.\d+$|^1(\.0+)?$/.test(value)) {
+                  	return parseFloat(value) * 100;
+                  }
+
+                  return -1;
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.indexer.cluster.get_settings
+          tags:
+            - tag: component
+              value: storage
+        - uuid: '29ef0dc4305140ac85bf4e15e8a5edf3'
+          name: 'Disk watermark high'
+          type: DEPENDENT
+          key: wazuh.indexer.watermark.high
+          delay: '0'
+          value_type: FLOAT
+          units: '%'
+          description: 'Effective value of cluster.routing.allocation.disk.watermark.high, in % of used disk space. -1 when the watermark is an absolute value. Above the high watermark OpenSearch moves shards away from the node.'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value),
+                  	value = null;
+
+                  ['transient', 'persistent', 'defaults'].some(function (scope) {
+                  	var node = data[scope];
+
+                  	'cluster.routing.allocation.disk.watermark.high'.split('.').forEach(function (key) {
+                  		node = (node !== undefined && node !== null) ? node[key] : undefined;
+                  	});
+                  	if (node !== undefined && node !== null) {
+                  		value = String(node);
+
+                  		return true;
+                  	}
+
+                  	return false;
+                  });
+
+                  if (value === null) {
+                  	throw 'Setting cluster.routing.allocation.disk.watermark.high is not set.';
+                  }
+
+                  // A watermark is a percentage ("85%"), a ratio ("0.85") or an absolute free space ("10gb").
+                  // Absolute values are returned as -1: the disk triggers use only relative watermarks.
+                  if (/^\d+(\.\d+)?%$/.test(value)) {
+                  	return parseFloat(value);
+                  }
+                  if (/^0?\.\d+$|^1(\.0+)?$/.test(value)) {
+                  	return parseFloat(value) * 100;
+                  }
+
+                  return -1;
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.indexer.cluster.get_settings
+          tags:
+            - tag: component
+              value: storage
+        - uuid: '69eed7fd9aae4516bc7edaeeed7d8acc'
+          name: 'Disk watermark flood stage'
+          type: DEPENDENT
+          key: wazuh.indexer.watermark.flood
+          delay: '0'
+          value_type: FLOAT
+          units: '%'
+          description: 'Effective value of cluster.routing.allocation.disk.watermark.flood_stage, in % of used disk space. -1 when the watermark is an absolute value. Above the flood-stage watermark OpenSearch sets a read-only block on every index with a shard on the node. Wazuh alerts are then no longer indexed.'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value),
+                  	value = null;
+
+                  ['transient', 'persistent', 'defaults'].some(function (scope) {
+                  	var node = data[scope];
+
+                  	'cluster.routing.allocation.disk.watermark.flood_stage'.split('.').forEach(function (key) {
+                  		node = (node !== undefined && node !== null) ? node[key] : undefined;
+                  	});
+                  	if (node !== undefined && node !== null) {
+                  		value = String(node);
+
+                  		return true;
+                  	}
+
+                  	return false;
+                  });
+
+                  if (value === null) {
+                  	throw 'Setting cluster.routing.allocation.disk.watermark.flood_stage is not set.';
+                  }
+
+                  // A watermark is a percentage ("85%"), a ratio ("0.85") or an absolute free space ("10gb").
+                  // Absolute values are returned as -1: the disk triggers use only relative watermarks.
+                  if (/^\d+(\.\d+)?%$/.test(value)) {
+                  	return parseFloat(value);
+                  }
+                  if (/^0?\.\d+$|^1(\.0+)?$/.test(value)) {
+                  	return parseFloat(value) * 100;
+                  }
+
+                  return -1;
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.indexer.cluster.get_settings
+          tags:
+            - tag: component
+              value: storage
+        - uuid: '6c0a32fae1684437b6ca0cea3382479d'
+          name: 'Shards in use, in % of the limit'
+          type: CALCULATED
+          key: wazuh.indexer.shards.limit.util
+          delay: '1m'
+          value_type: FLOAT
+          units: '%'
+          params: '100*(last(//wazuh.indexer.shards.active)+last(//wazuh.indexer.shards.unassigned))/(last(//wazuh.indexer.max_shards_per_node)*last(//wazuh.indexer.nodes.data))'
+          description: 'Active and unassigned shards in % of the cluster shard limit (cluster.max_shards_per_node multiplied by the data nodes). New indices cannot be created when the limit is reached, so Wazuh stops indexing alerts at the next daily index rollover.'
+          tags:
+            - tag: component
+              value: shards
+          triggers:
+            - uuid: '26e5471a3ea64cf7984516f6530ac84d'
+              expression: 'last(/Wazuh indexer by HTTP/wazuh.indexer.shards.limit.util)>{$WAZUH.INDEXER.SHARDS.MAX.WARN}'
+              name: 'Wazuh indexer: Shard usage is close to the cluster limit'
+              event_name: 'Wazuh indexer: Shard usage is close to the cluster limit (over {$WAZUH.INDEXER.SHARDS.MAX.WARN}%)'
+              opdata: 'Used: {ITEM.LASTVALUE1}'
+              priority: WARNING
+              description: 'When the shard limit is reached, OpenSearch refuses to create new indices and the next daily wazuh-alerts index is not created. Delete old indices, lower the replica count or raise cluster.max_shards_per_node.'
+              tags:
+                - tag: scope
+                  value: capacity
+        - uuid: e713b77e5423426d9971177ff0e27c62
+          name: Version
+          type: DEPENDENT
+          key: wazuh.indexer.version
+          delay: '0'
+          value_type: CHAR
+          trends: '0'
+          description: 'OpenSearch version of the first node in the nodes info response.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$..version.first()'
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1d'
+          master_item:
+            key: wazuh.indexer.nodes.get_info
+          tags:
+            - tag: component
+              value: application
+        - uuid: '49908d5b8f184d939a59dedd28f6e7f0'
+          name: 'Alerts indexed'
+          type: DEPENDENT
+          key: wazuh.indexer.alerts.count
+          delay: '0'
+          description: 'Alerts indexed in the last {$WAZUH.INDEXER.ALERTS.WINDOW}.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.hits.total.value'
+          master_item:
+            key: wazuh.indexer.alerts.get
+          tags:
+            - tag: component
+              value: alerts
+          triggers:
+            - uuid: '17b9436961c84f1abb4a40705c7cb573'
+              expression: 'last(/Wazuh indexer by HTTP/wazuh.indexer.alerts.count)=0'
+              name: 'Wazuh indexer: No alerts indexed'
+              event_name: 'Wazuh indexer: No alerts indexed in the last {$WAZUH.INDEXER.ALERTS.WINDOW}'
+              priority: HIGH
+              description: 'No document was written to {$WAZUH.INDEXER.ALERTS.INDEX} in the time window. Check the Filebeat output on the Wazuh server nodes, the indexer health and the disk watermarks.'
+              dependencies:
+                - name: 'Wazuh indexer: Service is down'
+                  expression: 'last(/Wazuh indexer by HTTP/net.tcp.service["{$WAZUH.INDEXER.SCHEME}","{$WAZUH.INDEXER.HOST}","{$WAZUH.INDEXER.PORT}"])=0'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: '159843d5ed194c3986ebeb32520607b8'
+          name: 'Newest alert time'
+          type: DEPENDENT
+          key: wazuh.indexer.alerts.last
+          delay: '0'
+          units: unixtime
+          description: 'Timestamp of the newest alert in the alerts index. No value when no alert was indexed in the time window.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.aggregations.last.value'
+            - type: MULTIPLIER
+              parameters:
+                - '0.001'
+          master_item:
+            key: wazuh.indexer.alerts.get
+          tags:
+            - tag: component
+              value: alerts
+      discovery_rules:
+        - uuid: '80d93bfc87214def874c9a40eda3e836'
+          name: 'Nodes discovery'
+          type: DEPENDENT
+          key: wazuh.indexer.nodes.discovery
+          delay: '0'
+          lld_macro_paths:
+            - lld_macro: '{#NODE.NAME}'
+              path: '$.name'
+            - lld_macro: '{#NODE.ROLES}'
+              path: '$.roles'
+          description: 'Discovers the nodes of the indexer cluster.'
+          item_prototypes:
+            - uuid: '5567656001d14ec78a15296c563321af'
+              name: 'Node [{#NODE.NAME}]: Get data'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              delay: '0'
+              history: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Normalized statistics of the node.'
+              preprocessing:
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var data = JSON.parse(value),
+                      	nodes = [];
+
+                      function pct(part, total) {
+                      	return (total > 0) ? Math.round(part / total * 10000) / 100 : 0;
+                      }
+
+                      Object.keys(data.nodes || {}).forEach(function (id) {
+                      	var node = data.nodes[id],
+                      		fs = (node.fs || {}).total || {},
+                      		process = node.process || {},
+                      		pools = node.thread_pool || {};
+
+                      	nodes.push({
+                      		name: node.name,
+                      		roles: (node.roles || []).join(','),
+                      		heap_pct: node.jvm.mem.heap_used_percent,
+                      		uptime: Math.floor(node.jvm.uptime_in_millis / 1000),
+                      		cpu_pct: node.os.cpu.percent,
+                      		disk_total: fs.total_in_bytes,
+                      		disk_available: fs.available_in_bytes,
+                      		disk_pct: pct(fs.total_in_bytes - fs.available_in_bytes, fs.total_in_bytes),
+                      		fd_pct: pct(process.open_file_descriptors, process.max_file_descriptors),
+                      		write_rejected: (pools.write || {}).rejected,
+                      		search_rejected: (pools.search || {}).rejected,
+                      		breaker_tripped: ((node.breakers || {}).parent || {}).tripped
+                      	});
+                      });
+
+                      return JSON.stringify(nodes);
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#NODE.NAME}'')].first()'
+              master_item:
+                key: wazuh.indexer.nodes.get_stats
+              tags:
+                - tag: component
+                  value: raw
+                - tag: node
+                  value: '{#NODE.NAME}'
+            - uuid: '4a09e9336e5b4717898e70554a6895af'
+              name: 'Node [{#NODE.NAME}]: JVM heap usage'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.heap.util[{#NODE.NAME}]'
+              delay: '0'
+              units: '%'
+              description: 'Used JVM heap, in % of the maximum heap.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.heap_pct'
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: memory
+                - tag: node
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: '87df1e546afb43c3a465b9bbc6660cd0'
+                  expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.heap.util[{#NODE.NAME}],1h)>{$WAZUH.INDEXER.HEAP.MAX.WARN}'
+                  name: 'Wazuh indexer: Node [{#NODE.NAME}]: JVM heap usage is high'
+                  event_name: 'Wazuh indexer: Node [{#NODE.NAME}]: JVM heap usage is high (over {$WAZUH.INDEXER.HEAP.MAX.WARN}% for 1h)'
+                  opdata: 'Used: {ITEM.LASTVALUE1}'
+                  priority: WARNING
+                  description: 'JVM heap usage is above the threshold for one hour.'
+                  dependencies:
+                    - name: 'Wazuh indexer: Node [{#NODE.NAME}]: JVM heap usage is critical'
+                      expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.heap.util[{#NODE.NAME}],1h)>{$WAZUH.INDEXER.HEAP.MAX.CRIT}'
+                  tags:
+                    - tag: scope
+                      value: capacity
+                - uuid: adf8ab63068941d7bca11f04d6cfc0ab
+                  expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.heap.util[{#NODE.NAME}],1h)>{$WAZUH.INDEXER.HEAP.MAX.CRIT}'
+                  name: 'Wazuh indexer: Node [{#NODE.NAME}]: JVM heap usage is critical'
+                  event_name: 'Wazuh indexer: Node [{#NODE.NAME}]: JVM heap usage is critical (over {$WAZUH.INDEXER.HEAP.MAX.CRIT}% for 1h)'
+                  opdata: 'Used: {ITEM.LASTVALUE1}'
+                  priority: HIGH
+                  description: 'JVM heap usage is close to the limit. The node can trip circuit breakers or run out of memory.'
+                  tags:
+                    - tag: scope
+                      value: capacity
+            - uuid: '1537231439114a95b5a9ee981b173110'
+              name: 'Node [{#NODE.NAME}]: Uptime'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.uptime[{#NODE.NAME}]'
+              delay: '0'
+              units: uptime
+              description: 'Time since the JVM of the node started.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.uptime'
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: application
+                - tag: node
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: b126f2eb993e4c8ba212072f7aa780f0
+                  expression: 'last(/Wazuh indexer by HTTP/wazuh.indexer.node.uptime[{#NODE.NAME}])<10m'
+                  name: 'Wazuh indexer: Node [{#NODE.NAME}]: Has been restarted'
+                  event_name: 'Wazuh indexer: Node [{#NODE.NAME}]: Has been restarted (uptime < 10m)'
+                  priority: INFO
+                  description: 'The JVM of the node started less than 10 minutes ago.'
+                  manual_close: 'YES'
+                  tags:
+                    - tag: scope
+                      value: notice
+            - uuid: e25e33673cef430ca64d420ee6148f9c
+              name: 'Node [{#NODE.NAME}]: CPU usage'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.cpu.util[{#NODE.NAME}]'
+              delay: '0'
+              units: '%'
+              description: 'CPU usage of the node host, as reported by OpenSearch.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.cpu_pct'
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: cpu
+                - tag: node
+                  value: '{#NODE.NAME}'
+            - uuid: '124f59cfdcc64ec2a16ba58d2af221d8'
+              name: 'Node [{#NODE.NAME}]: Disk total'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.disk.total[{#NODE.NAME}]'
+              delay: '0'
+              units: B
+              description: 'Total size of the data paths.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.disk_total'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - '1d'
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: node
+                  value: '{#NODE.NAME}'
+            - uuid: ee6ed693ae4c497ea4c874860761ee5e
+              name: 'Node [{#NODE.NAME}]: Disk available'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.disk.available[{#NODE.NAME}]'
+              delay: '0'
+              units: B
+              description: 'Disk space available to OpenSearch on the data paths.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.disk_available'
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: node
+                  value: '{#NODE.NAME}'
+            - uuid: '6ea678daaf75442ebc640cd9494a27d0'
+              name: 'Node [{#NODE.NAME}]: Disk usage'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.disk.util[{#NODE.NAME}]'
+              delay: '0'
+              value_type: FLOAT
+              units: '%'
+              description: 'Used disk space of the data paths, in %. Calculated from total and available bytes, as the disk watermarks are.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.disk_pct'
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: storage
+                - tag: node
+                  value: '{#NODE.NAME}'
+            - uuid: '9baaa82a91b04dd9b133ca2c62c11043'
+              name: 'Node [{#NODE.NAME}]: File descriptors usage'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.fd.util[{#NODE.NAME}]'
+              delay: '0'
+              value_type: FLOAT
+              units: '%'
+              description: 'Open file descriptors, in % of the process limit.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.fd_pct'
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: os
+                - tag: node
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: '9c187c613eff4072b66b51770d338f75'
+                  expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.fd.util[{#NODE.NAME}],5m)>{$WAZUH.INDEXER.FD.MAX.WARN}'
+                  name: 'Wazuh indexer: Node [{#NODE.NAME}]: File descriptors usage is high'
+                  event_name: 'Wazuh indexer: Node [{#NODE.NAME}]: File descriptors usage is high (over {$WAZUH.INDEXER.FD.MAX.WARN}%)'
+                  opdata: 'Used: {ITEM.LASTVALUE1}'
+                  priority: WARNING
+                  description: 'The node is close to the open files limit of the process.'
+                  tags:
+                    - tag: scope
+                      value: capacity
+            - uuid: '642db966f285448f9354a6dbf5cdec77'
+              name: 'Node [{#NODE.NAME}]: Write rejections per second'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.write.rejected.rate[{#NODE.NAME}]'
+              delay: '0'
+              value_type: FLOAT
+              units: rps
+              description: 'Rejected tasks of the write thread pool. Rejected bulk requests mean dropped alerts unless the shipper retries.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.write_rejected'
+                - type: CHANGE_PER_SECOND
+                  parameters:
+                    - ''
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: performance
+                - tag: node
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: '705bcaa6ae0c469a9d4a349fd825abbe'
+                  expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.write.rejected.rate[{#NODE.NAME}],5m)>0'
+                  name: 'Wazuh indexer: Node [{#NODE.NAME}]: Write requests are rejected'
+                  opdata: 'Rate: {ITEM.LASTVALUE1}'
+                  priority: WARNING
+                  description: 'The write thread pool queue is full and the node rejects indexing requests.'
+                  tags:
+                    - tag: scope
+                      value: performance
+            - uuid: '68f0923e622540af94e9b23d1f1d6ad1'
+              name: 'Node [{#NODE.NAME}]: Search rejections per second'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.search.rejected.rate[{#NODE.NAME}]'
+              delay: '0'
+              value_type: FLOAT
+              units: rps
+              description: 'Rejected tasks of the search thread pool.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.search_rejected'
+                - type: CHANGE_PER_SECOND
+                  parameters:
+                    - ''
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: performance
+                - tag: node
+                  value: '{#NODE.NAME}'
+            - uuid: ab1d6ab919ae4c90ae315bd07f1427b2
+              name: 'Node [{#NODE.NAME}]: Parent breaker trips per second'
+              type: DEPENDENT
+              key: 'wazuh.indexer.node.breaker.tripped.rate[{#NODE.NAME}]'
+              delay: '0'
+              value_type: FLOAT
+              description: 'Trips of the parent circuit breaker. A trip rejects the request to protect the JVM heap.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$.breaker_tripped'
+                - type: CHANGE_PER_SECOND
+                  parameters:
+                    - ''
+              master_item:
+                key: 'wazuh.indexer.node.get[{#NODE.NAME}]'
+              tags:
+                - tag: component
+                  value: memory
+                - tag: node
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: bc63ff1856794cd0b81322012d163455
+                  expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.breaker.tripped.rate[{#NODE.NAME}],5m)>0'
+                  name: 'Wazuh indexer: Node [{#NODE.NAME}]: Parent circuit breaker trips'
+                  opdata: 'Rate: {ITEM.LASTVALUE1}'
+                  priority: WARNING
+                  description: 'The parent circuit breaker rejects requests because the JVM heap is close to its limit.'
+                  tags:
+                    - tag: scope
+                      value: performance
+          trigger_prototypes:
+            - uuid: c85171796b474f54afbe39aa32575339
+              expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.disk.util[{#NODE.NAME}],5m)>last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.low) and last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.low)>0'
+              name: 'Wazuh indexer: Node [{#NODE.NAME}]: Disk usage is over the low watermark'
+              opdata: 'Used: {ITEM.LASTVALUE1}, watermark: {ITEM.LASTVALUE2}'
+              priority: WARNING
+              description: 'OpenSearch no longer allocates new shards to the node.'
+              dependencies:
+                - name: 'Wazuh indexer: Node [{#NODE.NAME}]: Disk usage is over the high watermark'
+                  expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.disk.util[{#NODE.NAME}],5m)>last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.high) and last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.high)>0'
+              tags:
+                - tag: scope
+                  value: capacity
+            - uuid: c0410b93406e46e8a9b0664524186836
+              expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.disk.util[{#NODE.NAME}],5m)>last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.high) and last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.high)>0'
+              name: 'Wazuh indexer: Node [{#NODE.NAME}]: Disk usage is over the high watermark'
+              opdata: 'Used: {ITEM.LASTVALUE1}, watermark: {ITEM.LASTVALUE2}'
+              priority: AVERAGE
+              description: 'OpenSearch moves shards away from the node.'
+              dependencies:
+                - name: 'Wazuh indexer: Node [{#NODE.NAME}]: Disk usage is over the flood stage watermark'
+                  expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.disk.util[{#NODE.NAME}],5m)>last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.flood) and last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.flood)>0'
+              tags:
+                - tag: scope
+                  value: capacity
+            - uuid: '6bfd65de9ba7464e91512a93d973ab32'
+              expression: 'min(/Wazuh indexer by HTTP/wazuh.indexer.node.disk.util[{#NODE.NAME}],5m)>last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.flood) and last(/Wazuh indexer by HTTP/wazuh.indexer.watermark.flood)>0'
+              name: 'Wazuh indexer: Node [{#NODE.NAME}]: Disk usage is over the flood stage watermark'
+              opdata: 'Used: {ITEM.LASTVALUE1}, watermark: {ITEM.LASTVALUE2}'
+              priority: HIGH
+              description: 'OpenSearch sets a read-only block on every index with a shard on the node. Alerts are no longer indexed in these indices.'
+              tags:
+                - tag: scope
+                  value: capacity
+          graph_prototypes:
+            - uuid: c6515d2996f24fe5a4735cfa5f38f5a0
+              name: 'Wazuh indexer: Node [{#NODE.NAME}]: Disk usage'
+              ymin_type_1: FIXED
+              graph_items:
+                - color: '7499FF'
+                  item:
+                    host: 'Wazuh indexer by HTTP'
+                    key: 'wazuh.indexer.node.disk.util[{#NODE.NAME}]'
+            - uuid: '0ec1223850c3478c89b216fa6141bc7c'
+              name: 'Wazuh indexer: Node [{#NODE.NAME}]: Rejections'
+              ymin_type_1: FIXED
+              graph_items:
+                - color: E45959
+                  item:
+                    host: 'Wazuh indexer by HTTP'
+                    key: 'wazuh.indexer.node.write.rejected.rate[{#NODE.NAME}]'
+                - sortorder: '1'
+                  color: FFA059
+                  item:
+                    host: 'Wazuh indexer by HTTP'
+                    key: 'wazuh.indexer.node.search.rejected.rate[{#NODE.NAME}]'
+                - sortorder: '2'
+                  color: FFBF59
+                  item:
+                    host: 'Wazuh indexer by HTTP'
+                    key: 'wazuh.indexer.node.breaker.tripped.rate[{#NODE.NAME}]'
+            - uuid: '3c1e778b8fb148919672332de6f848a3'
+              name: 'Wazuh indexer: Node [{#NODE.NAME}]: JVM heap and CPU'
+              ymin_type_1: FIXED
+              graph_items:
+                - color: '00C48C'
+                  item:
+                    host: 'Wazuh indexer by HTTP'
+                    key: 'wazuh.indexer.node.heap.util[{#NODE.NAME}]'
+                - sortorder: '1'
+                  color: '7499FF'
+                  item:
+                    host: 'Wazuh indexer by HTTP'
+                    key: 'wazuh.indexer.node.cpu.util[{#NODE.NAME}]'
+          master_item:
+            key: wazuh.indexer.nodes.get_stats
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var data = JSON.parse(value),
+                  	nodes = [];
+
+                  function pct(part, total) {
+                  	return (total > 0) ? Math.round(part / total * 10000) / 100 : 0;
+                  }
+
+                  Object.keys(data.nodes || {}).forEach(function (id) {
+                  	var node = data.nodes[id],
+                  		fs = (node.fs || {}).total || {},
+                  		process = node.process || {},
+                  		pools = node.thread_pool || {};
+
+                  	nodes.push({
+                  		name: node.name,
+                  		roles: (node.roles || []).join(','),
+                  		heap_pct: node.jvm.mem.heap_used_percent,
+                  		uptime: Math.floor(node.jvm.uptime_in_millis / 1000),
+                  		cpu_pct: node.os.cpu.percent,
+                  		disk_total: fs.total_in_bytes,
+                  		disk_available: fs.available_in_bytes,
+                  		disk_pct: pct(fs.total_in_bytes - fs.available_in_bytes, fs.total_in_bytes),
+                  		fd_pct: pct(process.open_file_descriptors, process.max_file_descriptors),
+                  		write_rejected: (pools.write || {}).rejected,
+                  		search_rejected: (pools.search || {}).rejected,
+                  		breaker_tripped: ((node.breakers || {}).parent || {}).tripped
+                  	});
+                  });
+
+                  return JSON.stringify(nodes);
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - '1h'
+      tags:
+        - tag: class
+          value: software
+        - tag: target
+          value: wazuh
+      macros:
+        - macro: '{$WAZUH.INDEXER.ALERTS.INDEX}'
+          value: 'wazuh-alerts-*'
+          description: 'Index pattern of the Wazuh alerts.'
+        - macro: '{$WAZUH.INDEXER.ALERTS.WINDOW}'
+          value: '10m'
+          description: 'Time window for counting indexed alerts, in OpenSearch date math units (m, h, d).'
+        - macro: '{$WAZUH.INDEXER.FD.MAX.WARN}'
+          value: '90'
+          description: 'Warning threshold of open file descriptors, in % of the limit.'
+        - macro: '{$WAZUH.INDEXER.HEAP.MAX.CRIT}'
+          value: '95'
+          description: 'Critical threshold of JVM heap usage, in %.'
+        - macro: '{$WAZUH.INDEXER.HEAP.MAX.WARN}'
+          value: '85'
+          description: 'Warning threshold of JVM heap usage, in %.'
+        - macro: '{$WAZUH.INDEXER.HOST}'
+          value: '<SET WAZUH INDEXER HOST>'
+          description: 'Hostname or IP address of a Wazuh indexer node.'
+        - macro: '{$WAZUH.INDEXER.PASSWORD}'
+          type: SECRET_TEXT
+          description: 'Password of the Wazuh indexer user.'
+        - macro: '{$WAZUH.INDEXER.PORT}'
+          value: '9200'
+          description: 'Wazuh indexer REST API port.'
+        - macro: '{$WAZUH.INDEXER.RESPONSE_TIME.MAX.WARN}'
+          value: '10s'
+          description: 'Maximum response time of the indexer port for the trigger expression.'
+        - macro: '{$WAZUH.INDEXER.SCHEME}'
+          value: https
+          description: 'Wazuh indexer REST API scheme (http or https).'
+        - macro: '{$WAZUH.INDEXER.SHARDS.MAX.WARN}'
+          value: '90'
+          description: 'Warning threshold of shards in use, in % of cluster.max_shards_per_node multiplied by the data nodes.'
+        - macro: '{$WAZUH.INDEXER.USER}'
+          value: ''
+          description: 'Wazuh indexer user with the cluster_monitor permission.'
+      dashboards:
+        - uuid: dac23f715b0a4d40b4e577f73d36038c
+          name: 'Wazuh indexer'
+          pages:
+            - name: Overview
+              widgets:
+                - type: graph
+                  width: '36'
+                  height: '5'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh indexer by HTTP'
+                        name: 'Wazuh indexer: Alerts indexed'
+                    - type: STRING
+                      name: reference
+                      value: AAAAA
+                - type: graph
+                  x: '36'
+                  width: '36'
+                  height: '5'
+                  fields:
+                    - type: GRAPH
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh indexer by HTTP'
+                        name: 'Wazuh indexer: Shards'
+                    - type: STRING
+                      name: reference
+                      value: AAAAB
+                - type: graphprototype
+                  'y': '5'
+                  width: '72'
+                  height: '10'
+                  fields:
+                    - type: GRAPH_PROTOTYPE
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh indexer by HTTP'
+                        name: 'Wazuh indexer: Node [{#NODE.NAME}]: Disk usage'
+                    - type: INTEGER
+                      name: columns
+                      value: '3'
+                    - type: INTEGER
+                      name: rows
+                      value: '2'
+                    - type: STRING
+                      name: reference
+                      value: AAAAC
+                - type: graphprototype
+                  'y': '15'
+                  width: '72'
+                  height: '10'
+                  fields:
+                    - type: GRAPH_PROTOTYPE
+                      name: graphid.0
+                      value:
+                        host: 'Wazuh indexer by HTTP'
+                        name: 'Wazuh indexer: Node [{#NODE.NAME}]: JVM heap and CPU'
+                    - type: INTEGER
+                      name: columns
+                      value: '3'
+                    - type: INTEGER
+                      name: rows
+                      value: '2'
+                    - type: STRING
+                      name: reference
+                      value: AAAAD
+      valuemaps:
+        - uuid: '6b04a769400b4cb48a339d8d5ce2a5bd'
+          name: 'Service state'
+          mappings:
+            - value: '0'
+              newvalue: Down
+            - value: '1'
+              newvalue: Up
+        - uuid: f7c2d798cf214c708ad07d7afeef6d8c
+          name: 'Wazuh indexer cluster state'
+          mappings:
+            - value: '0'
+              newvalue: green
+            - value: '1'
+              newvalue: yellow
+            - value: '2'
+              newvalue: red
+            - value: '255'
+              newvalue: unknown
+  graphs:
+    - uuid: c33cfa873b3c42bf84f3714ffc28c4fa
+      name: 'Wazuh indexer: Shards'
+      ymin_type_1: FIXED
+      graph_items:
+        - color: '00C48C'
+          item:
+            host: 'Wazuh indexer by HTTP'
+            key: wazuh.indexer.shards.active
+        - sortorder: '1'
+          color: '7499FF'
+          item:
+            host: 'Wazuh indexer by HTTP'
+            key: wazuh.indexer.shards.relocating
+        - sortorder: '2'
+          color: FFBF59
+          item:
+            host: 'Wazuh indexer by HTTP'
+            key: wazuh.indexer.shards.initializing
+        - sortorder: '3'
+          color: E45959
+          item:
+            host: 'Wazuh indexer by HTTP'
+            key: wazuh.indexer.shards.unassigned
+    - uuid: '42089bf47f9c4431bc5c5651cc5ccc4b'
+      name: 'Wazuh indexer: Alerts indexed'
+      ymin_type_1: FIXED
+      graph_items:
+        - color: FFA059
+          item:
+            host: 'Wazuh indexer by HTTP'
+            key: wazuh.indexer.alerts.count
+    - uuid: fb583a2e76cd4d7e8ed4fee4fc1d13eb
+      name: 'Wazuh indexer: Service response time'
+      ymin_type_1: FIXED
+      graph_items:
+        - color: '7499FF'
+          item:
+            host: 'Wazuh indexer by HTTP'
+            key: 'net.tcp.service.perf["{$WAZUH.INDEXER.SCHEME}","{$WAZUH.INDEXER.HOST}","{$WAZUH.INDEXER.PORT}"]'
